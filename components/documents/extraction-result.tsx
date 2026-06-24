@@ -4,7 +4,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Quote } from "lucide-react";
+import { AlertTriangle, Quote } from "lucide-react";
 import type { CaseDocument } from "@/lib/types";
 
 function Field({ label, value }: { label: string; value: string | null }) {
@@ -37,14 +37,41 @@ export function ExtractionResult({ document }: { document: CaseDocument }) {
     );
   }
 
+  const interviewerNames = data.interviewerNames ?? [];
+  const extractionWarnings = data.extractionWarnings ?? [];
+
   return (
     <div className="space-y-6">
+      {extractionWarnings.length > 0 ? (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <AlertTriangle className="text-amber-600 size-4" />
+              Extraction Warnings
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ul className="list-inside list-disc space-y-1.5 text-sm">
+              {extractionWarnings.map((warning, i) => (
+                <li key={i}>{warning}</li>
+              ))}
+            </ul>
+          </CardContent>
+        </Card>
+      ) : null}
+
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Metadata</CardTitle>
         </CardHeader>
-        <CardContent className="grid gap-4 sm:grid-cols-3">
+        <CardContent className="grid gap-4 sm:grid-cols-4">
           <Field label="Interviewee Name" value={data.intervieweeName} />
+          <Field
+            label="Interviewer"
+            value={
+              interviewerNames.length > 0 ? interviewerNames.join(", ") : null
+            }
+          />
           <Field label="Role" value={data.role} />
           <Field label="Date" value={data.interviewDate} />
         </CardContent>

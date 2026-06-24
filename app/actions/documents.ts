@@ -1,12 +1,19 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { extractPdfText } from "@/lib/pdf";
-import { extractInterviewData } from "@/lib/openai";
+import { extractDocumentText } from "@/lib/extract-text";
+import { createExtractionChunks } from "@/lib/extraction-chunks";
+import { isSupportedDocument, SUPPORTED_LABEL } from "@/lib/documents";
+import {
+  extractInterviewChunk,
+  verifyInterviewExtraction,
+} from "@/lib/openai";
+import { suggestCaseType } from "@/lib/db/cases";
 import {
   createDocumentFromUpload,
   getDocument,
   saveExtractionResult,
+  setExtractionProgress,
   setDocumentStatus,
 } from "@/lib/db/documents";
 import type { CaseDocument } from "@/lib/types";
@@ -14,8 +21,9 @@ import type { CaseDocument } from "@/lib/types";
 const MAX_FILE_BYTES = 20 * 1024 * 1024; // 20 MB
 
 /**
- * Upload a single PDF to a case. The PDF text is extracted immediately and
- * stored in `rawText`; AI extraction is deliberately NOT run here.
+ * Upload a single document (PDF, TXT, DOC, or DOCX) to a case. Its text is
+ * extracted immediately and stored in `rawText`; AI extraction is deliberately
+ * NOT run here.
  */
 export async function uploadDocumentAction(
   formData: FormData
@@ -29,8 +37,8 @@ export async function uploadDocumentAction(
   if (!(file instanceof File)) {
     throw new Error("No file provided.");
   }
-  if (file.type !== "application/pdf") {
-    throw new Error("Only PDF files are supported.");
+  if (!isSupportedDocument(file.name)) {
+    throw new Error(`Unsupported file type. Allowed: ${SUPPORTED_LABEL}.`);
   }
   if (file.size === 0) {
     throw new Error("The uploaded file is empty.");
@@ -43,9 +51,9 @@ export async function uploadDocumentAction(
 
   let rawText = "";
   try {
-    rawText = await extractPdfText(bytes);
+    rawText = await extractDocumentText(file.name, bytes);
   } catch {
-    throw new Error("Could not read text from this PDF.");
+    throw new Error("Could not read text from this document.");
   }
 
   const document = await createDocumentFromUpload({
@@ -79,8 +87,54 @@ export async function extractDocumentAction(
   revalidatePath(`/cases/${document.caseId}`);
 
   try {
-    const extracted = await extractInterviewData(document.rawText);
-    const updated = await saveExtractionResult(documentId, extracted);
+    const chunks = createExtractionChunks(document.rawText);
+    const totalSteps = chunks.length + 1;
+    const drafts = [];
+
+    await setExtractionProgress({
+      id: documentId,
+      currentStep: 0,
+      totalSteps,
+      step: `Prepared ${chunks.length} section${chunks.length === 1 ? "" : "s"}`,
+    });
+
+    for (const [index, chunk] of chunks.entries()) {
+      await setExtractionProgress({
+        id: documentId,
+        currentStep: index,
+        totalSteps,
+        step: `Extracting ${chunk.label}`,
+      });
+      drafts.push(await extractInterviewChunk(chunk));
+      await setExtractionProgress({
+        id: documentId,
+        currentStep: index + 1,
+        totalSteps,
+        step: `Finished ${chunk.label}`,
+      });
+    }
+
+    await setExtractionProgress({
+      id: documentId,
+      currentStep: chunks.length,
+      totalSteps,
+      step: "Verifying final extraction",
+    });
+
+    const { suggestedCaseType, ...extracted } =
+      await verifyInterviewExtraction(drafts);
+    const updated = await saveExtractionResult(documentId, extracted, {
+      currentStep: totalSteps,
+      totalSteps,
+      step: "Verified extraction",
+    });
+
+    // Apply the AI's suggested type, but only if the case is still
+    // unclassified — `suggestCaseType` is a no-op once a type exists.
+    if (suggestedCaseType) {
+      await suggestCaseType(document.caseId, suggestedCaseType);
+    }
+
     revalidatePath(`/cases/${document.caseId}`);
     revalidatePath(`/cases/${document.caseId}/documents/${documentId}`);
     return updated;

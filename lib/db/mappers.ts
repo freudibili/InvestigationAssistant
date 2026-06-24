@@ -10,6 +10,7 @@ export function mapCase(row: CaseRow): Case {
     title: row.title,
     companyName: row.company_name,
     caseType: row.case_type,
+    caseTypeSource: row.case_type_source,
     createdAt: row.created_at,
   };
 }
@@ -23,6 +24,9 @@ export function mapDocument(row: DocumentRow): CaseDocument {
     status: row.status,
     rawText: row.raw_text,
     extractedData: row.extracted_data,
+    extractionCurrentStep: row.extraction_current_step,
+    extractionTotalSteps: row.extraction_total_steps,
+    extractionStep: row.extraction_step,
     createdAt: row.created_at,
     extractedAt: row.extracted_at,
   };

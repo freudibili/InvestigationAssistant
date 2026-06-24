@@ -19,6 +19,12 @@ export const CASE_TYPE_LABELS: Record<CaseType, string> = {
   retaliation: "Retaliation",
 };
 
+/** Where a case's current type came from. Null when the case is unclassified. */
+export type CaseTypeSource = "suggested" | "confirmed";
+
+/** Shown when a case has no type yet. */
+export const UNCLASSIFIED_LABEL = "Unclassified";
+
 export const DOCUMENT_STATUSES = [
   "uploaded",
   "extracting",
@@ -35,7 +41,8 @@ export interface Case {
   id: string;
   title: string;
   companyName: string;
-  caseType: CaseType;
+  caseType: CaseType | null;
+  caseTypeSource: CaseTypeSource | null;
   createdAt: string;
 }
 
@@ -47,6 +54,9 @@ export interface CaseDocument {
   status: DocumentStatus;
   rawText: string | null;
   extractedData: ExtractedData | null;
+  extractionCurrentStep: number;
+  extractionTotalSteps: number;
+  extractionStep: string | null;
   createdAt: string;
   extractedAt: string | null;
 }

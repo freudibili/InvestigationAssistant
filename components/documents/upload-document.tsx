@@ -5,6 +5,11 @@ import { Upload } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
+import {
+  isSupportedDocument,
+  SUPPORTED_LABEL,
+  UPLOAD_ACCEPT,
+} from "@/lib/documents";
 import { useUploadDocument } from "@/hooks/use-documents";
 
 export function UploadDocument({ caseId }: { caseId: string }) {
@@ -15,16 +20,16 @@ export function UploadDocument({ caseId }: { caseId: string }) {
   async function handleFiles(files: FileList | null) {
     if (!files || files.length === 0) return;
 
-    const pdfs = Array.from(files).filter(
-      (f) => f.type === "application/pdf"
+    const supported = Array.from(files).filter((f) =>
+      isSupportedDocument(f.name)
     );
-    if (pdfs.length === 0) {
-      toast.error("Please select PDF files.");
+    if (supported.length === 0) {
+      toast.error(`Please select ${SUPPORTED_LABEL} files.`);
       return;
     }
 
     // Upload sequentially so each gets its text extracted reliably.
-    for (const file of pdfs) {
+    for (const file of supported) {
       try {
         await upload.mutateAsync(file);
         toast.success(`Uploaded ${file.name}`);
@@ -60,13 +65,14 @@ export function UploadDocument({ caseId }: { caseId: string }) {
       <div>
         <p className="text-sm font-medium">Upload interview transcripts</p>
         <p className="text-muted-foreground text-xs">
-          Drop PDF files here, or browse. Text is extracted automatically.
+          Drop {SUPPORTED_LABEL} files here, or browse. Text is extracted
+          automatically.
         </p>
       </div>
       <input
         ref={inputRef}
         type="file"
-        accept="application/pdf"
+        accept={UPLOAD_ACCEPT}
         multiple
         className="hidden"
         onChange={(e) => void handleFiles(e.target.files)}

@@ -46,7 +46,11 @@ export function CreateCaseDialog() {
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
 
-    const parsed = createCaseSchema.safeParse({ title, companyName, caseType });
+    const parsed = createCaseSchema.safeParse({
+      title,
+      companyName,
+      caseType: caseType || undefined,
+    });
     if (!parsed.success) {
       toast.error(parsed.error.issues[0]?.message ?? "Please check the form.");
       return;
@@ -111,13 +115,13 @@ export function CreateCaseDialog() {
             </div>
 
             <div className="grid gap-2">
-              <Label htmlFor="case-type">Case type</Label>
+              <Label htmlFor="case-type">Case type (optional)</Label>
               <Select
                 value={caseType}
                 onValueChange={(v) => setCaseType(v as CaseType)}
               >
                 <SelectTrigger id="case-type" className="w-full">
-                  <SelectValue placeholder="Select a type" />
+                  <SelectValue placeholder="Not sure yet" />
                 </SelectTrigger>
                 <SelectContent>
                   {CASE_TYPES.map((type) => (
@@ -127,6 +131,10 @@ export function CreateCaseDialog() {
                   ))}
                 </SelectContent>
               </Select>
+              <p className="text-muted-foreground text-xs">
+                Leave blank if unknown — the assistant will suggest a type once
+                you extract a document.
+              </p>
             </div>
           </div>
 

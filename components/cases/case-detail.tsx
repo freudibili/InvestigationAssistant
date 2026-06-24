@@ -2,9 +2,10 @@
 
 import { UploadDocument } from "@/components/documents/upload-document";
 import { DocumentList } from "@/components/documents/document-list";
+import { CaseTypeControl } from "@/components/cases/case-type-control";
+import { DeleteCaseDialog } from "@/components/cases/delete-case-dialog";
 import { useCase } from "@/hooks/use-case";
-import { CASE_TYPE_LABELS, type Case, type CaseDocument } from "@/lib/types";
-import { Badge } from "@/components/ui/badge";
+import type { Case, CaseDocument } from "@/lib/types";
 
 export function CaseDetail({
   caseId,
@@ -25,16 +26,20 @@ export function CaseDetail({
 
   return (
     <div className="space-y-8">
-      <div>
-        <Badge variant="outline">
-          {CASE_TYPE_LABELS[investigationCase.caseType]}
-        </Badge>
-        <h1 className="mt-2 text-2xl font-semibold tracking-tight">
-          {investigationCase.title}
-        </h1>
-        <p className="text-muted-foreground text-sm">
-          {investigationCase.companyName}
-        </p>
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <CaseTypeControl investigationCase={investigationCase} />
+          <h1 className="mt-2 text-2xl font-semibold tracking-tight">
+            {investigationCase.title}
+          </h1>
+          <p className="text-muted-foreground text-sm">
+            {investigationCase.companyName}
+          </p>
+        </div>
+        <DeleteCaseDialog
+          caseId={caseId}
+          caseTitle={investigationCase.title}
+        />
       </div>
 
       <UploadDocument caseId={caseId} />

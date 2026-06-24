@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { useCases } from "@/hooks/use-cases";
-import { CASE_TYPE_LABELS, type Case } from "@/lib/types";
+import { CASE_TYPE_LABELS, UNCLASSIFIED_LABEL, type Case } from "@/lib/types";
 
 function formatDate(iso: string) {
   return new Date(iso).toLocaleDateString(undefined, {
@@ -46,7 +46,12 @@ export function CaseList({ initialCases }: { initialCases: Case[] }) {
           <Card className="h-full transition-colors group-hover:border-foreground/20">
             <CardHeader>
               <div className="flex items-center justify-between gap-2">
-                <Badge variant="outline">{CASE_TYPE_LABELS[c.caseType]}</Badge>
+                <Badge
+                  variant="outline"
+                  className={c.caseType ? undefined : "text-muted-foreground"}
+                >
+                  {c.caseType ? CASE_TYPE_LABELS[c.caseType] : UNCLASSIFIED_LABEL}
+                </Badge>
                 <ArrowRight className="text-muted-foreground size-4 transition-transform group-hover:translate-x-0.5" />
               </div>
               <CardTitle className="mt-2">{c.title}</CardTitle>

@@ -1,4 +1,9 @@
-import type { CaseType, DocumentStatus, ExtractedData } from "@/lib/types";
+import type {
+  CaseType,
+  CaseTypeSource,
+  DocumentStatus,
+  ExtractedData,
+} from "@/lib/types";
 
 /**
  * Hand-maintained typing for the Supabase schema. When the project grows you
@@ -12,14 +17,16 @@ export type Database = {
           id: string;
           title: string;
           company_name: string;
-          case_type: CaseType;
+          case_type: CaseType | null;
+          case_type_source: CaseTypeSource | null;
           created_at: string;
         };
         Insert: {
           id?: string;
           title: string;
           company_name: string;
-          case_type: CaseType;
+          case_type?: CaseType | null;
+          case_type_source?: CaseTypeSource | null;
           created_at?: string;
         };
         Update: Partial<Database["public"]["Tables"]["cases"]["Insert"]>;
@@ -34,6 +41,9 @@ export type Database = {
           status: DocumentStatus;
           raw_text: string | null;
           extracted_data: ExtractedData | null;
+          extraction_current_step: number;
+          extraction_total_steps: number;
+          extraction_step: string | null;
           created_at: string;
           extracted_at: string | null;
         };
@@ -45,6 +55,9 @@ export type Database = {
           status?: DocumentStatus;
           raw_text?: string | null;
           extracted_data?: ExtractedData | null;
+          extraction_current_step?: number;
+          extraction_total_steps?: number;
+          extraction_step?: string | null;
           created_at?: string;
           extracted_at?: string | null;
         };
@@ -63,6 +76,7 @@ export type Database = {
     Functions: Record<never, never>;
     Enums: {
       case_type: CaseType;
+      case_type_source: CaseTypeSource;
       document_status: DocumentStatus;
     };
     CompositeTypes: Record<never, never>;

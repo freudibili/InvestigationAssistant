@@ -3,6 +3,10 @@ import "server-only";
 import { getSupabaseAdmin } from "@/lib/supabase/admin";
 import { mapDocument } from "@/lib/db/mappers";
 import { env } from "@/lib/env";
+import {
+  CONTENT_TYPE_BY_EXTENSION,
+  getSupportedExtension,
+} from "@/lib/documents";
 import type { CaseDocument, DocumentStatus, ExtractedData } from "@/lib/types";
 
 export async function listDocumentsForCase(
@@ -32,8 +36,9 @@ export async function getDocument(id: string): Promise<CaseDocument | null> {
 }
 
 /**
- * Upload a PDF to Storage, extract its text, and create the document record.
- * The text extraction is done eagerly on upload; the AI extraction is not.
+ * Upload a document to Storage, extract its text, and create the document
+ * record. The text extraction is done eagerly on upload; the AI extraction is
+ * not. The stored object keeps the original file's extension and content type.
  */
 export async function createDocumentFromUpload(params: {
   caseId: string;
@@ -42,12 +47,13 @@ export async function createDocumentFromUpload(params: {
   rawText: string;
 }): Promise<CaseDocument> {
   const supabase = getSupabaseAdmin();
-  const objectPath = `${params.caseId}/${crypto.randomUUID()}.pdf`;
+  const ext = getSupportedExtension(params.fileName) ?? ".pdf";
+  const objectPath = `${params.caseId}/${crypto.randomUUID()}${ext}`;
 
   const { error: uploadError } = await supabase.storage
     .from(env.storageBucket)
     .upload(objectPath, params.fileBytes, {
-      contentType: "application/pdf",
+      contentType: CONTENT_TYPE_BY_EXTENSION[ext],
       upsert: false,
     });
 
@@ -81,14 +87,51 @@ export async function setDocumentStatus(
   const supabase = getSupabaseAdmin();
   const { error } = await supabase
     .from("documents")
-    .update({ status })
+    .update({
+      status,
+      ...(status === "extracting"
+        ? {
+            extraction_current_step: 0,
+            extraction_total_steps: 0,
+            extraction_step: "Preparing document",
+          }
+        : {}),
+    })
     .eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+export async function setExtractionProgress(params: {
+  id: string;
+  currentStep: number;
+  totalSteps: number;
+  step: string;
+}): Promise<void> {
+  const supabase = getSupabaseAdmin();
+  const { error } = await supabase
+    .from("documents")
+    .update({
+      extraction_current_step: params.currentStep,
+      extraction_total_steps: params.totalSteps,
+      extraction_step: params.step,
+    })
+    .eq("id", params.id);
+
   if (error) throw new Error(error.message);
 }
 
 export async function saveExtractionResult(
   id: string,
-  extractedData: ExtractedData
+  extractedData: ExtractedData,
+  progress: {
+    currentStep: number;
+    totalSteps: number;
+    step: string;
+  } = {
+    currentStep: 1,
+    totalSteps: 1,
+    step: "Verified extraction",
+  }
 ): Promise<CaseDocument> {
   const supabase = getSupabaseAdmin();
   const { data, error } = await supabase
@@ -96,6 +139,9 @@ export async function saveExtractionResult(
     .update({
       status: "extracted",
       extracted_data: extractedData,
+      extraction_current_step: progress.currentStep,
+      extraction_total_steps: progress.totalSteps,
+      extraction_step: progress.step,
       extracted_at: new Date().toISOString(),
     })
     .eq("id", id)
@@ -106,7 +152,7 @@ export async function saveExtractionResult(
   return mapDocument(data);
 }
 
-/** Create a short-lived signed URL so the original PDF can be viewed. */
+/** Create a short-lived signed URL so the original document can be viewed. */
 export async function createSignedUrl(
   objectPath: string,
   expiresInSeconds = 60 * 10
