@@ -19,6 +19,7 @@ begin
       'uploaded',
       'extracting',
       'extracted',
+      'canceled',
       'failed'
     );
   end if;

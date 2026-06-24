@@ -29,6 +29,7 @@ export const DOCUMENT_STATUSES = [
   "uploaded",
   "extracting",
   "extracted",
+  "canceled",
   "failed",
 ] as const;
 

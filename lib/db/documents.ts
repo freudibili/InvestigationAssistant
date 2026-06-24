@@ -101,8 +101,70 @@ export async function setDocumentStatus(
   if (error) throw new Error(error.message);
 }
 
+export async function startDocumentExtraction(
+  id: string,
+  runId: string
+): Promise<void> {
+  const supabase = getSupabaseAdmin();
+  const { error } = await supabase
+    .from("documents")
+    .update({
+      status: "extracting",
+      extraction_current_step: 0,
+      extraction_total_steps: 0,
+      extraction_step: "Preparing document",
+      extraction_run_id: runId,
+    })
+    .eq("id", id);
+
+  if (error) throw new Error(error.message);
+}
+
+export async function cancelDocumentExtraction(
+  id: string
+): Promise<CaseDocument> {
+  const supabase = getSupabaseAdmin();
+  const { data, error } = await supabase
+    .from("documents")
+    .update({
+      status: "canceled",
+      extraction_step: "Extraction canceled",
+    })
+    .eq("id", id)
+    .eq("status", "extracting")
+    .select("*")
+    .maybeSingle();
+
+  if (error) throw new Error(error.message);
+  if (data) return mapDocument(data);
+
+  const current = await getDocument(id);
+  if (!current) throw new Error("Document not found.");
+  return current;
+}
+
+export async function getDocumentExtractionRunState(
+  id: string
+): Promise<Pick<CaseDocument, "status"> & { extractionRunId: string | null }> {
+  const supabase = getSupabaseAdmin();
+  const { data, error } = await supabase
+    .from("documents")
+    .select("status, extraction_run_id")
+    .eq("id", id)
+    .maybeSingle();
+
+  if (error) throw new Error(error.message);
+  if (!data) throw new Error("Document not found.");
+
+  return {
+    status: data.status,
+    extractionRunId: data.extraction_run_id,
+  };
+}
+
 export async function setExtractionProgress(params: {
   id: string;
+  runId: string;
   currentStep: number;
   totalSteps: number;
   step: string;
@@ -115,13 +177,16 @@ export async function setExtractionProgress(params: {
       extraction_total_steps: params.totalSteps,
       extraction_step: params.step,
     })
-    .eq("id", params.id);
+    .eq("id", params.id)
+    .eq("status", "extracting")
+    .eq("extraction_run_id", params.runId);
 
   if (error) throw new Error(error.message);
 }
 
 export async function saveExtractionResult(
   id: string,
+  runId: string,
   extractedData: ExtractedData,
   progress: {
     currentStep: number;
@@ -142,14 +207,45 @@ export async function saveExtractionResult(
       extraction_current_step: progress.currentStep,
       extraction_total_steps: progress.totalSteps,
       extraction_step: progress.step,
+      extraction_run_id: runId,
       extracted_at: new Date().toISOString(),
     })
     .eq("id", id)
+    .eq("status", "extracting")
+    .eq("extraction_run_id", runId)
     .select("*")
-    .single();
+    .maybeSingle();
 
   if (error) throw new Error(error.message);
+  if (!data) throw new Error("Extraction is no longer active.");
   return mapDocument(data);
+}
+
+/**
+ * Permanently delete a document: remove its stored file (best-effort) and its
+ * database row. Returns the case id so callers can revalidate the case view.
+ */
+export async function deleteDocument(id: string): Promise<{ caseId: string }> {
+  const supabase = getSupabaseAdmin();
+
+  const { data, error: fetchError } = await supabase
+    .from("documents")
+    .select("case_id, file_url")
+    .eq("id", id)
+    .maybeSingle();
+
+  if (fetchError) throw new Error(fetchError.message);
+  if (!data) throw new Error("Document not found.");
+
+  // Best-effort storage cleanup; a missing object shouldn't block deletion.
+  if (data.file_url) {
+    await supabase.storage.from(env.storageBucket).remove([data.file_url]);
+  }
+
+  const { error } = await supabase.from("documents").delete().eq("id", id);
+  if (error) throw new Error(error.message);
+
+  return { caseId: data.case_id };
 }
 
 /** Create a short-lived signed URL so the original document can be viewed. */

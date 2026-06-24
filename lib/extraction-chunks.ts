@@ -2,15 +2,23 @@ import "server-only";
 
 export interface ExtractionChunk {
   label: string;
+  pageStart: number | null;
+  pageEnd?: number;
+  hasRealPagination: boolean;
   text: string;
 }
 
 const PAGE_MARKER_RE = /(?:^|\n)\s*--- Page (\d+) ---\s*\n/g;
 const MAX_CHUNK_CHARS = 12000;
 
-export function createExtractionChunks(rawText: string): ExtractionChunk[] {
-  const pageChunks = splitMarkedPages(rawText);
-  if (pageChunks.length > 0) return pageChunks;
+export function createExtractionChunks(
+  rawText: string,
+  options: { hasRealPagination: boolean } = { hasRealPagination: false }
+): ExtractionChunk[] {
+  if (options.hasRealPagination) {
+    const pageChunks = splitMarkedPages(rawText);
+    if (pageChunks.length > 0) return pageChunks;
+  }
 
   return splitTextIntoChunks(rawText);
 }
@@ -28,7 +36,9 @@ function splitMarkedPages(rawText: string): ExtractionChunk[] {
           : rawText.length;
 
       return {
-        label: `page ${match[1]}`,
+        label: `Page ${match[1]}`,
+        pageStart: Number(match[1]),
+        hasRealPagination: true,
         text: rawText.slice(start, end).trim(),
       };
     })
@@ -72,7 +82,9 @@ function splitTextIntoChunks(rawText: string): ExtractionChunk[] {
   if (current) chunks.push(current);
 
   return chunks.map((text, index) => ({
-    label: `chunk ${index + 1}`,
+    label: `Internal segment ${index + 1}`,
+    pageStart: null,
+    hasRealPagination: false,
     text,
   }));
 }

@@ -44,6 +44,7 @@ export type Database = {
           extraction_current_step: number;
           extraction_total_steps: number;
           extraction_step: string | null;
+          extraction_run_id: string | null;
           created_at: string;
           extracted_at: string | null;
         };
@@ -58,6 +59,7 @@ export type Database = {
           extraction_current_step?: number;
           extraction_total_steps?: number;
           extraction_step?: string | null;
+          extraction_run_id?: string | null;
           created_at?: string;
           extracted_at?: string | null;
         };

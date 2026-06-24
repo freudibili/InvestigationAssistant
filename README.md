@@ -15,6 +15,8 @@ Create case → Upload interview PDFs → (manually) Extract → Review structur
 
 - PDF text is extracted **on upload** and stored as `rawText`.
 - AI extraction runs **only when the investigator clicks “Extract Interview Data”.**
+- Running AI extraction can be canceled from the document row; canceled documents
+  can be retried.
 - The LLM response is validated with Zod; invalid output marks the document `failed`.
 
 ## Tech stack
@@ -59,8 +61,8 @@ supabase/migrations/0001_init.sql          # Schema, enums, RLS, storage bucket
 **cases**: `id`, `title`, `companyName`, `caseType`, `createdAt`
 
 **documents**: `id`, `caseId`, `fileName`, `fileUrl`, `status`
-(`uploaded | extracting | extracted | failed`), `rawText`, `extractedData`,
-`createdAt`, `extractedAt`
+(`uploaded | extracting | extracted | canceled | failed`), `rawText`,
+`extractedData`, `createdAt`, `extractedAt`
 
 ## Getting started
 

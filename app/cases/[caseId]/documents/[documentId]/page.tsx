@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 
-import { getDocument } from "@/lib/db/documents";
+import { createSignedUrl, getDocument } from "@/lib/db/documents";
 import { ExtractionResult } from "@/components/documents/extraction-result";
 import { StatusBadge } from "@/components/documents/status-badge";
 
@@ -17,6 +17,7 @@ export default async function DocumentResultPage({
   const document = await getDocument(documentId);
 
   if (!document || document.caseId !== caseId) notFound();
+  const originalDocumentUrl = await createSignedUrl(document.fileUrl);
 
   return (
     <div className="space-y-6">
@@ -38,7 +39,10 @@ export default async function DocumentResultPage({
         <StatusBadge status={document.status} />
       </div>
 
-      <ExtractionResult document={document} />
+      <ExtractionResult
+        document={document}
+        originalDocumentUrl={originalDocumentUrl}
+      />
     </div>
   );
 }

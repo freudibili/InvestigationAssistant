@@ -1,5 +1,5 @@
 import { Badge } from "@/components/ui/badge";
-import { CheckCircle2, FileText, Loader2, XCircle } from "lucide-react";
+import { CheckCircle2, FileText, Loader2, StopCircle, XCircle } from "lucide-react";
 import type { DocumentStatus } from "@/lib/types";
 import type { ComponentProps } from "react";
 
@@ -20,6 +20,7 @@ const CONFIG: Record<
     spin: true,
   },
   extracted: { label: "Extracted", variant: "success", icon: CheckCircle2 },
+  canceled: { label: "Canceled", variant: "secondary", icon: StopCircle },
   failed: { label: "Failed", variant: "destructive", icon: XCircle },
 };
 
