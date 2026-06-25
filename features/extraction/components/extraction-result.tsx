@@ -29,6 +29,7 @@ import type { CaseDocument, ExtractedData } from "@/lib/types";
 type QuoteItem = ExtractedData["notableQuotes"][number];
 type WitnessItem = ExtractedData["potentialWitnesses"][number];
 type SourceContext = {
+  caseId: string;
   documentId: string;
   documentName: string;
   /**
@@ -42,9 +43,11 @@ type PageReference = {
   label: string;
   pageStart: number;
 };
+type QuoteProvenance = NonNullable<QuoteItem["provenance"]>;
 
 /** Collapse a section behind a <details> once it grows past this many items. */
 const COLLAPSE_THRESHOLD = 12;
+const NO_VERIFIED_QUOTE = "No verified supporting quote available.";
 
 /**
  * The name to show for the cited source. When the stored object is a paginated
@@ -85,12 +88,52 @@ function SourceBadges({
   pages,
   source,
   quote,
+  provenance,
 }: {
   pages?: string[];
   source: SourceContext;
   /** When the cited item is a quote, its verbatim text — highlighted in the PDF. */
   quote?: string;
+  provenance?: QuoteProvenance;
 }) {
+  if (provenance) {
+    if (!isClickableQuoteProvenance(provenance)) {
+      return (
+        <Badge
+          variant="outline"
+          className="text-muted-foreground gap-1 text-xs font-normal"
+        >
+          <FileText className="size-3" />
+          {NO_VERIFIED_QUOTE}
+        </Badge>
+      );
+    }
+
+    return (
+      <SourcePageBadge
+        page={{
+          label: `Page ${provenance.pageNumber}`,
+          pageStart: provenance.pageNumber,
+        }}
+        source={source}
+        quote={quote}
+        provenance={provenance}
+      />
+    );
+  }
+
+  if (quote) {
+    return (
+      <Badge
+        variant="outline"
+        className="text-muted-foreground gap-1 text-xs font-normal"
+      >
+        <FileText className="size-3" />
+        {NO_VERIFIED_QUOTE}
+      </Badge>
+    );
+  }
+
   const pageReferences = (pages ?? [])
     .map(parsePageReference)
     .filter((page): page is PageReference => Boolean(page));
@@ -115,9 +158,29 @@ function SourceBadges({
           page={page}
           source={source}
           quote={quote}
+          provenance={provenance}
         />
       ))}
     </span>
+  );
+}
+
+type ClickableQuoteProvenance = QuoteProvenance & {
+  pageNumber: number;
+  charStart: number;
+  charEnd: number;
+};
+
+function isClickableQuoteProvenance(
+  provenance: QuoteProvenance
+): provenance is ClickableQuoteProvenance {
+  return (
+    provenance.verified &&
+    provenance.pageNumber !== null &&
+    provenance.charStart !== null &&
+    provenance.charEnd !== null &&
+    (provenance.sourceStatus === "verified" ||
+      provenance.sourceStatus === "fuzzy_verified")
   );
 }
 
@@ -125,10 +188,12 @@ function SourcePageBadge({
   page,
   source,
   quote,
+  provenance,
 }: {
   page: PageReference;
   source: SourceContext;
   quote?: string;
+  provenance?: QuoteProvenance;
 }) {
   const openViewer = useSourceViewer();
 
@@ -138,9 +203,17 @@ function SourcePageBadge({
       onClick={() =>
         openViewer?.({
           documentId: source.documentId,
+          caseId: source.caseId,
           documentName: source.documentName,
           label: page.label,
           page: page.pageStart,
+          quoteId: provenance?.id,
+          charStart: provenance?.charStart,
+          charEnd: provenance?.charEnd,
+          pageCharStart: provenance?.pageCharStart,
+          pageCharEnd: provenance?.pageCharEnd,
+          normalizedPageCharStart: provenance?.normalizedPageCharStart,
+          normalizedPageCharEnd: provenance?.normalizedPageCharEnd,
           quote,
         })
       }
@@ -224,6 +297,7 @@ function Quote({
         pages={quote.sourcePages}
         source={source}
         quote={quote.text}
+        provenance={quote.provenance}
       />
     </blockquote>
   );
@@ -238,11 +312,15 @@ function QuoteList({
   empty: string;
   source: SourceContext;
 }) {
-  if (quotes.length === 0) return <EmptyState>{empty}</EmptyState>;
+  const verifiedQuotes = quotes.filter((quote) =>
+    quote.provenance ? isClickableQuoteProvenance(quote.provenance) : false
+  );
+
+  if (verifiedQuotes.length === 0) return <EmptyState>{empty}</EmptyState>;
 
   return (
     <div className="space-y-3">
-      {quotes.map((quote, i) => (
+      {verifiedQuotes.map((quote, i) => (
         <Quote key={i} quote={quote} source={source} />
       ))}
     </div>
@@ -323,6 +401,7 @@ export function ExtractionResult({
   // converted at extraction time; `fileUrl` (not `fileName`) reflects that.
   const isPdfSource = getSupportedExtension(document.fileUrl) === ".pdf";
   const source: SourceContext = {
+    caseId: document.caseId,
     documentId: document.id,
     // A non-PDF upload is converted to a paginated PDF at extraction time and
     // the source link/viewer serves that PDF. The original `fileName` keeps its
@@ -406,7 +485,7 @@ export function ExtractionResult({
                     </p>
                     <QuoteList
                       quotes={allegation.relevantQuotes ?? []}
-                      empty="No supporting quotes captured for this allegation."
+                      empty={NO_VERIFIED_QUOTE}
                       source={source}
                     />
                   </div>
@@ -428,11 +507,11 @@ export function ExtractionResult({
                   {(fact.supportingQuotes ?? []).length > 0 ? (
                     <QuoteList
                       quotes={fact.supportingQuotes}
-                      empty=""
+                      empty={NO_VERIFIED_QUOTE}
                       source={source}
                     />
                   ) : (
-                    <SourceBadges pages={fact.sourcePages} source={source} />
+                    <EmptyState>{NO_VERIFIED_QUOTE}</EmptyState>
                   )}
                 </li>
               ))}
@@ -481,7 +560,15 @@ export function ExtractionResult({
                       Participants: {(event.participants ?? []).join(", ")}
                     </p>
                   ) : null}
-                  <SourceBadges pages={event.sourcePages} source={source} />
+                  {(event.supportingQuotes ?? []).length > 0 ? (
+                    <QuoteList
+                      quotes={event.supportingQuotes}
+                      empty={NO_VERIFIED_QUOTE}
+                      source={source}
+                    />
+                  ) : (
+                    <EmptyState>{NO_VERIFIED_QUOTE}</EmptyState>
+                  )}
                 </li>
               ))}
             </ul>
@@ -508,11 +595,11 @@ export function ExtractionResult({
                   {(witness.supportingQuotes ?? []).length > 0 ? (
                     <QuoteList
                       quotes={witness.supportingQuotes}
-                      empty=""
+                      empty={NO_VERIFIED_QUOTE}
                       source={source}
                     />
                   ) : (
-                    <SourceBadges pages={witness.sourcePages} source={source} />
+                    <EmptyState>{NO_VERIFIED_QUOTE}</EmptyState>
                   )}
                 </li>
               ))}
@@ -531,7 +618,7 @@ export function ExtractionResult({
         >
           <QuoteList
             quotes={notableQuotes}
-            empty="No relevant quotes captured."
+            empty={NO_VERIFIED_QUOTE}
             source={source}
           />
         </CollapsibleSectionCard>

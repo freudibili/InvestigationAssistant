@@ -504,6 +504,7 @@ function QuoteChip({ quote }: { quote: QuoteRef }) {
           documentName: quote.documentName,
           label: `Page ${quote.page}`,
           page: quote.page as number,
+          quoteId: quote.provenanceId ?? undefined,
           quote: quote.text,
         })
       }

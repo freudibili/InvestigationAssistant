@@ -14,10 +14,9 @@ function getClient() {
 /**
  * Anthropic (Claude Sonnet 4.6) extraction backend.
  *
- * Adaptive thinking is enabled for extraction-reasoning quality — separating
- * allegations from facts, attributing speakers, and spotting contradictions
- * benefits from the model reasoning before it emits JSON. We stream and read
- * the final message because the extraction schema is large; a non-streaming
+ * Optional adaptive thinking can be enabled for extraction-reasoning quality,
+ * but it is off by default because it increases latency and cost. We stream and
+ * read the final message because the extraction schema is large; a non-streaming
  * call at this `max_tokens` risks an HTTP timeout.
  *
  * Unlike OpenAI's `json_object` mode, Claude has no hard JSON-only switch here,
@@ -31,7 +30,9 @@ export const anthropicProvider: ExtractionProvider = {
     const stream = getClient().messages.stream({
       model: env.anthropicModel,
       max_tokens: env.anthropicMaxTokens,
-      thinking: { type: "adaptive" },
+      ...(env.anthropicThinkingEnabled
+        ? { thinking: { type: "adaptive" as const } }
+        : {}),
       system,
       messages: [{ role: "user", content: user }],
     });

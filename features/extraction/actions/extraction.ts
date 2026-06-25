@@ -14,6 +14,7 @@ import {
   extractInterviewChunkWithFallback,
   parseStoredDrafts,
 } from "@/features/extraction/lib/pipeline";
+import { groundExtractionQuotes } from "@/features/extraction/lib/quote-grounding";
 import { suggestCaseType } from "@/lib/db/cases";
 import {
   cancelDocumentExtraction,
@@ -247,7 +248,32 @@ export async function extractDocumentAction(
     );
     await assertExtractionIsActive(documentId, runId);
 
-    const updated = await saveExtractionResult(documentId, runId, extracted, {
+    await setExtractionProgress({
+      id: documentId,
+      runId,
+      currentStep: totalPages,
+      totalSteps,
+      step: "Grounding quotes",
+    });
+    await assertExtractionIsActive(documentId, runId);
+
+    const grounded = await groundExtractionQuotes({
+      documentId,
+      rawText,
+      extractedData: extracted,
+    });
+    await assertExtractionIsActive(documentId, runId);
+
+    await setExtractionProgress({
+      id: documentId,
+      runId,
+      currentStep: totalPages,
+      totalSteps,
+      step: "Saving extraction result",
+    });
+    await assertExtractionIsActive(documentId, runId);
+
+    const updated = await saveExtractionResult(documentId, runId, grounded, {
       currentStep: totalSteps,
       totalSteps,
       step: "Verified extraction",

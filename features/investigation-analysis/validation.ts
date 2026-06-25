@@ -17,6 +17,7 @@ const stringArray = z.array(z.string()).default([]);
 /** A resolved, clickable piece of evidence. The only thing the UI links to. */
 export const quoteRefSchema = z.object({
   id: z.string(),
+  provenanceId: z.string().nullable().default(null),
   text: z.string(),
   speaker: z.string().nullable().default(null),
   /** 1-based PDF page, or null when the source had no real pagination. */

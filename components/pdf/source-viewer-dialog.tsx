@@ -18,12 +18,20 @@ const SourcePdfViewer = dynamic(
 );
 
 export type SourceViewerTarget = {
+  caseId?: string;
   documentId: string;
   documentName: string;
   /** Human label for the page, e.g. "Page 4". */
   label: string;
   /** 1-based page to open. */
   page: number;
+  quoteId?: string;
+  charStart?: number | null;
+  charEnd?: number | null;
+  pageCharStart?: number | null;
+  pageCharEnd?: number | null;
+  normalizedPageCharStart?: number | null;
+  normalizedPageCharEnd?: number | null;
   /** Verbatim quote to highlight on the page, when the source is a quote. */
   quote?: string | null;
 };
@@ -37,8 +45,14 @@ export function useSourceViewer() {
   return useContext(SourceViewerContext);
 }
 
-function sourceHref(documentId: string, page: number) {
-  return `/api/documents/${documentId}/source?page=${page}`;
+function sourceHref(target: SourceViewerTarget) {
+  const params = new URLSearchParams();
+  if (target.quoteId) params.set("quoteId", target.quoteId);
+  else params.set("page", String(target.page));
+  if (target.caseId) {
+    return `/cases/${target.caseId}/documents/${target.documentId}/source?${params.toString()}`;
+  }
+  return `/api/documents/${target.documentId}/source?${params.toString()}`;
 }
 
 /**
@@ -71,7 +85,7 @@ export function SourceViewerProvider({
                     · {target.label}
                   </span>
                   <a
-                    href={sourceHref(target.documentId, target.page)}
+                    href={sourceHref(target)}
                     target="_blank"
                     rel="noreferrer"
                     className="text-muted-foreground hover:text-foreground inline-flex items-center gap-1 text-xs font-normal"
@@ -84,6 +98,13 @@ export function SourceViewerProvider({
               <SourcePdfViewer
                 documentId={target.documentId}
                 page={target.page}
+                quoteId={target.quoteId}
+                charStart={target.charStart}
+                charEnd={target.charEnd}
+                pageCharStart={target.pageCharStart}
+                pageCharEnd={target.pageCharEnd}
+                normalizedPageCharStart={target.normalizedPageCharStart}
+                normalizedPageCharEnd={target.normalizedPageCharEnd}
                 quote={target.quote}
               />
             </>

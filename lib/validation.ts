@@ -27,6 +27,27 @@ const stringWithDefault = (fallback = "") =>
 
 const sourcePagesSchema = z.array(z.string()).default([]);
 
+const quoteProvenanceSchema = z.object({
+  id: z.string(),
+  documentId: z.string(),
+  quoteText: z.string(),
+  pageNumber: z.number().int().positive(),
+  charStart: z.number().int().nonnegative(),
+  charEnd: z.number().int().nonnegative(),
+  pageCharStart: z.number().int().nonnegative(),
+  pageCharEnd: z.number().int().nonnegative(),
+  normalizedPageCharStart: z.number().int().nonnegative(),
+  normalizedPageCharEnd: z.number().int().nonnegative(),
+  matchStrategy: z.enum(["exact", "normalized", "fuzzy"]),
+  matchedBy: z.enum(["exact", "normalized", "fuzzy"]),
+  confidence: z.number().min(0).max(1),
+  verified: z.boolean(),
+  sourceStatus: z.enum(["verified", "fuzzy_verified"]),
+  extractionItemId: z.string(),
+  supportedItemId: z.string(),
+  boundingBoxes: z.null(),
+});
+
 // The model is asked for `{ description, sourcePages }` objects, but for some
 // fields (notably findingReadiness.*) it occasionally emits a bare string —
 // likely because evidenceAssessment reuses the same field names as plain
@@ -52,6 +73,7 @@ const quoteItemSchema = z.object({
   speaker: nullableMetadataString.default(null),
   text: z.string(),
   sourcePages: sourcePagesSchema,
+  provenance: quoteProvenanceSchema.optional(),
 });
 
 // A factual statement plus the verbatim transcript quote(s) it was drawn from.
@@ -67,6 +89,7 @@ const eventItemSchema = z.object({
   date: nullableMetadataString.default(null),
   description: z.string(),
   participants: z.array(z.string()).default([]),
+  supportingQuotes: z.array(quoteItemSchema).default([]),
   sourcePages: sourcePagesSchema,
 });
 

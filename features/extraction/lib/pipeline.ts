@@ -3,6 +3,7 @@ import "server-only";
 import { ZodError } from "zod";
 import { extractionResponseSchema } from "@/lib/validation";
 import { CASE_TYPES } from "@/lib/types";
+import { env } from "@/lib/env";
 import type { ExtractionResponse } from "@/lib/validation";
 import {
   splitChunkIntoSinglePages,
@@ -51,7 +52,135 @@ Return ONLY valid JSON matching the requested schema — no markdown, no comment
 
 const CASE_TYPE_LIST = CASE_TYPES.join('", "');
 
-const USER_PROMPT = `Analyze this workplace investigation interview transcript source unit.
+export type ExtractionMode = "lean" | "full";
+
+const DEFAULT_EXTRACTION_MODE: ExtractionMode = "lean";
+
+const LEAN_USER_PROMPT = `Analyze this workplace investigation interview transcript source unit in lean extraction mode.
+
+Extract only material useful to an investigator at the first review stage:
+
+1. Document metadata: interviewee name, interview date, interviewee role, interviewer names.
+2. Allegations mentioned.
+3. Key facts directly related to allegations, the interview subject, employment context, management actions, disputed events, or referenced evidence.
+4. Key timeline events directly related to allegations, employment context, management actions, disputed situations, or referenced evidence.
+5. Named people and possible roles.
+6. Potential witnesses or participants.
+7. Referenced evidence or documents, including emails, Teams messages, reports, evaluations, meeting minutes, complaints, contracts, calendars, expense notes, security reports, and shared documents.
+8. Supporting quotes attached to extracted allegations, facts, events, witnesses, or referenced evidence.
+
+Lean limits:
+- Do not generate follow-up questions. Return [] for top-level followUpQuestions and allegation followUpQuestions.
+- Do not generate standalone notable/relevant quote lists. Return [] for top-level notableQuotes and pageFindings.notableQuotes.
+- Keep allegation relevantQuotes only when they directly support that allegation.
+- Extract at most 30 factualStatements for the whole document.
+- Extract at most 30 keyEvents for the whole document.
+- Keep people and witnesses concise: name, stated role if available, pages, and one short relevance reason.
+- Keep extractionWarnings to at most 10 useful, actionable document-level warnings. Remove duplicates, generic warnings, and contradictions.
+- Skip exhaustive opinions, assumptions, hearsay, observations, risk areas, finding readiness analysis, evidence assessments, and recommended next interviews unless the item is directly necessary to understand an allegation or evidence gap.
+
+Traceability rules:
+- Use only information explicitly present in the transcript.
+- Quote text in supportingQuotes and allegation relevantQuotes must be copied verbatim from the transcript. Never fabricate, paraphrase, translate, or shorten a quote.
+- If the transcript header names a single "Source page", every item must include sourcePages with that exact page label, such as "Page 4".
+- If the transcript header lists "Source pages" for a range, the body is split by "--- Page N ---" markers; set each item's sourcePages to the specific page label(s) where it appears, such as "Page 5", never the whole range or a marker line.
+- If the transcript header says "Source pagination: unavailable", sourcePages must be [] for every item and extractionWarnings must include that original page references are unavailable.
+- Never expose, cite, or mention internal chunks or segments.
+- Page numbers for clickable quote navigation are verified later by deterministic matching. The model must only provide exact quote text and sourcePages.
+
+Classification rules:
+- Keep allegations separate from facts and events. An allegation is a claim to be tested; it is not a proven fact.
+- Do not classify opinions, interpretations, assumptions, hearsay, or direct observations as allegations unless they assert specific alleged misconduct or a complaint to be investigated.
+- Use null rather than guessing a date, claimant, subject, role, speaker, or metadata value.
+- Suggested case type must be one of "${CASE_TYPE_LIST}" only if clearly supported; otherwise null.
+
+Return ONLY valid JSON matching this shape:
+
+{
+  "intervieweeName": string | null,
+  "interviewDate": string | null,
+  "role": string | null,
+  "interviewerNames": string[],
+  "extractionWarnings": string[],
+  "summary": string,
+  "investigationScope": {
+    "primaryClaimants": string[],
+    "primaryAccused": string[],
+    "scopeSummary": string,
+    "primaryAllegations": string[],
+    "secondaryObservations": string[],
+    "sourcePages": string[]
+  },
+  "allegations": [
+    {
+      "date": string | null,
+      "claimant": string | null,
+      "subject": string | null,
+      "classification": "primary" | "secondary",
+      "allegation": string,
+      "description": string,
+      "supportingEvidence": [{ "description": string, "sourcePages": string[] }],
+      "contradictoryEvidence": [{ "description": string, "sourcePages": string[] }],
+      "missingEvidence": string[],
+      "relevantQuotes": [{ "speaker": string | null, "text": string, "sourcePages": string[] }],
+      "witnesses": [{ "name": string, "relevance": string, "supportingQuotes": [{ "speaker": string | null, "text": string, "sourcePages": string[] }], "sourcePages": string[] }],
+      "followUpQuestions": string[],
+      "riskAreas": string[],
+      "sourcePages": string[]
+    }
+  ],
+  "peopleMentioned": string[],
+  "canonicalIdentities": [{ "canonicalName": string, "variants": string[], "role": string | null, "sourcePages": string[] }],
+  "keyEvents": [{ "date": string | null, "description": string, "participants": string[], "supportingQuotes": [{ "speaker": string | null, "text": string, "sourcePages": string[] }], "sourcePages": string[] }],
+  "notableQuotes": [],
+  "factualStatements": [{ "description": string, "supportingQuotes": [{ "speaker": string | null, "text": string, "sourcePages": string[] }], "sourcePages": string[] }],
+  "opinions": [{ "description": string, "sourcePages": string[] }],
+  "assumptions": [{ "description": string, "sourcePages": string[] }],
+  "hearsay": [{ "description": string, "sourcePages": string[] }],
+  "observations": [{ "description": string, "sourcePages": string[] }],
+  "potentialWitnesses": [{ "name": string, "relevance": string, "supportingQuotes": [{ "speaker": string | null, "text": string, "sourcePages": string[] }], "sourcePages": string[] }],
+  "consolidatedWitnesses": [{ "name": string, "whyTheyMatter": string, "relatedAllegations": string[], "mentionedInInterviews": string[], "priorityScore": number, "sourcePages": string[] }],
+  "missingInformation": [{ "description": string, "sourcePages": string[] }],
+  "followUpQuestions": [],
+  "recommendedNextInterviews": [],
+  "riskAreas": [{ "description": string, "sourcePages": string[] }],
+  "findingReadiness": {
+    "supportableFindings": [{ "description": string, "sourcePages": string[] }],
+    "unprovenFindings": [{ "description": string, "sourcePages": string[] }],
+    "evidenceToCollect": [{ "description": string, "sourcePages": string[] }]
+  },
+  "investigationImpact": string,
+  "interviewPosition": {
+    "classification": "Supports claimant" | "Supports accused" | "Mixed / nuanced" | "Neutral witness" | "Unknown",
+    "rationale": string,
+    "sourcePages": string[]
+  },
+  "evidenceAssessment": [],
+  "pageFindings": [
+    {
+      "sourcePage": string,
+      "allegations": [],
+      "factualStatements": [{ "description": string, "sourcePages": string[] }],
+      "opinions": [],
+      "assumptions": [],
+      "hearsay": [],
+      "observations": [],
+      "notableQuotes": [],
+      "supportingEvidence": [{ "description": string, "sourcePages": string[] }],
+      "contradictoryEvidence": [{ "description": string, "sourcePages": string[] }],
+      "potentialWitnesses": [{ "name": string, "relevance": string, "sourcePages": string[] }],
+      "relevantEvents": [{ "date": string | null, "description": string, "participants": string[], "supportingQuotes": [{ "speaker": string | null, "text": string, "sourcePages": string[] }], "sourcePages": string[] }]
+    }
+  ],
+  "suggestedCaseType": "${CASE_TYPE_LIST}" | null
+}
+
+Transcript:
+"""
+{{TRANSCRIPT}}
+"""`;
+
+const FULL_USER_PROMPT = `Analyze this workplace investigation interview transcript source unit.
 
 Optimize for investigation, evidence analysis, traceability, and report preparation. Do not optimize for summarization.
 
@@ -176,6 +305,7 @@ Expected schema:
       "date": string | null,
       "description": string,
       "participants": string[],
+      "supportingQuotes": [{ "speaker": string | null, "text": string, "sourcePages": string[] }],
       "sourcePages": string[]
     }
   ],
@@ -229,7 +359,7 @@ Expected schema:
       "supportingEvidence": [{ "description": string, "sourcePages": string[] }],
       "contradictoryEvidence": [{ "description": string, "sourcePages": string[] }],
       "potentialWitnesses": [{ "name": string, "relevance": string, "sourcePages": string[] }],
-      "relevantEvents": [{ "date": string | null, "description": string, "participants": string[], "sourcePages": string[] }]
+      "relevantEvents": [{ "date": string | null, "description": string, "participants": string[], "supportingQuotes": [{ "speaker": string | null, "text": string, "sourcePages": string[] }], "sourcePages": string[] }]
     }
   ],
   "suggestedCaseType": "${CASE_TYPE_LIST}" | null
@@ -331,6 +461,7 @@ Expected schema:
       "date": string | null,
       "description": string,
       "participants": string[],
+      "supportingQuotes": [{ "speaker": string | null, "text": string, "sourcePages": string[] }],
       "sourcePages": string[]
     }
   ],
@@ -384,7 +515,7 @@ Expected schema:
       "supportingEvidence": [{ "description": string, "sourcePages": string[] }],
       "contradictoryEvidence": [{ "description": string, "sourcePages": string[] }],
       "potentialWitnesses": [{ "name": string, "relevance": string, "sourcePages": string[] }],
-      "relevantEvents": [{ "date": string | null, "description": string, "participants": string[], "sourcePages": string[] }]
+      "relevantEvents": [{ "date": string | null, "description": string, "participants": string[], "supportingQuotes": [{ "speaker": string | null, "text": string, "sourcePages": string[] }], "sourcePages": string[] }]
     }
   ],
   "suggestedCaseType": "${CASE_TYPE_LIST}" | null
@@ -400,25 +531,24 @@ Page drafts:
  * status.
  */
 export async function extractInterviewData(
-  transcript: string
+  transcript: string,
+  mode: ExtractionMode = DEFAULT_EXTRACTION_MODE
 ): Promise<ExtractionResponse> {
-  return requestExtraction(USER_PROMPT.replace("{{TRANSCRIPT}}", transcript));
+  return requestExtraction(buildUserPrompt(transcript, mode), mode);
 }
 
 export async function extractInterviewChunk(
   chunk: ExtractionChunk,
-  documentName: string
+  documentName: string,
+  mode: ExtractionMode = DEFAULT_EXTRACTION_MODE
 ): Promise<ExtractionResponse> {
   const response = await requestExtraction(
-    USER_PROMPT.replace(
-      "{{TRANSCRIPT}}",
-      `Document: ${documentName}\n${chunkProvenanceHeader(chunk)}\n\n${chunk.text}`
-    )
+    buildUserPrompt(
+      `Document: ${documentName}\n${chunkProvenanceHeader(chunk)}\n\n${chunk.text}`,
+      mode
+    ),
+    mode
   );
-  // The model reliably labels the per-page `pageFindings` bucket but routinely
-  // leaves every item's `sourcePages` array empty. We know exactly which page(s)
-  // this chunk came from, so stamp that provenance deterministically rather than
-  // trusting the model to repeat it on each item.
   return stampChunkProvenance(response, chunk);
 }
 
@@ -431,10 +561,11 @@ export async function extractInterviewChunk(
  */
 export async function extractInterviewChunkWithFallback(
   chunk: ExtractionChunk,
-  documentName: string
+  documentName: string,
+  mode: ExtractionMode = DEFAULT_EXTRACTION_MODE
 ): Promise<ExtractionResponse[]> {
   try {
-    return [await extractInterviewChunk(chunk, documentName)];
+    return [await extractInterviewChunk(chunk, documentName, mode)];
   } catch (error) {
     const singlePages = splitChunkIntoSinglePages(chunk);
     if (!isRecoverableExtractionError(error) || singlePages.length < 2) {
@@ -442,9 +573,14 @@ export async function extractInterviewChunkWithFallback(
     }
 
     return Promise.all(
-      singlePages.map((page) => extractInterviewChunk(page, documentName))
+      singlePages.map((page) => extractInterviewChunk(page, documentName, mode))
     );
   }
+}
+
+function buildUserPrompt(transcript: string, mode: ExtractionMode): string {
+  const prompt = mode === "full" ? FULL_USER_PROMPT : LEAN_USER_PROMPT;
+  return prompt.replace("{{TRANSCRIPT}}", transcript);
 }
 
 /**
@@ -611,6 +747,7 @@ function stampChunkProvenance(
  */
 type SupportingQuoteIndex = {
   facts: Map<string, QuoteItem[]>;
+  events: Map<string, QuoteItem[]>;
   witnesses: Map<string, QuoteItem[]>;
   allegations: Map<string, QuoteItem[]>;
 };
@@ -638,12 +775,16 @@ function buildSupportingQuoteIndex(
   drafts: ExtractionResponse[]
 ): SupportingQuoteIndex {
   const facts = new Map<string, QuoteItem[]>();
+  const events = new Map<string, QuoteItem[]>();
   const witnesses = new Map<string, QuoteItem[]>();
   const allegations = new Map<string, QuoteItem[]>();
 
   for (const draft of drafts) {
     for (const fact of draft.factualStatements) {
       addSupportingQuotes(facts, fact.description, fact.supportingQuotes);
+    }
+    for (const event of draft.keyEvents) {
+      addSupportingQuotes(events, event.description, event.supportingQuotes);
     }
     for (const witness of draft.potentialWitnesses) {
       addSupportingQuotes(witnesses, witness.name, witness.supportingQuotes);
@@ -661,7 +802,7 @@ function buildSupportingQuoteIndex(
     }
   }
 
-  return { facts, witnesses, allegations };
+  return { facts, events, witnesses, allegations };
 }
 
 /**
@@ -682,6 +823,13 @@ function backfillSupportingQuotes(
         fact.supportingQuotes.length > 0
           ? fact.supportingQuotes
           : index.facts.get(normalizeForComparison(fact.description)) ?? [],
+    })),
+    keyEvents: response.keyEvents.map((event) => ({
+      ...event,
+      supportingQuotes:
+        event.supportingQuotes.length > 0
+          ? event.supportingQuotes
+          : index.events.get(normalizeForComparison(event.description)) ?? [],
     })),
     potentialWitnesses: response.potentialWitnesses.map((witness) => ({
       ...witness,
@@ -732,7 +880,7 @@ function applySourcePages(
   type Quote = { text: string; sourcePages: string[] };
   type Fact = Evidence & { supportingQuotes: Quote[] };
   type Witness = { name: string; supportingQuotes: Quote[]; sourcePages: string[] };
-  type Event = { description: string; sourcePages: string[] };
+  type Event = { description: string; supportingQuotes: Quote[]; sourcePages: string[] };
 
   const evidence = <T extends Evidence>(items: T[]): T[] =>
     items.map((item) => ({
@@ -761,6 +909,7 @@ function applySourcePages(
   const events = <T extends Event>(items: T[]): T[] =>
     items.map((item) => ({
       ...item,
+      supportingQuotes: quotes(item.supportingQuotes),
       sourcePages: resolve(item.description, item.sourcePages),
     }));
   const allegations = <T extends AllegationItem>(items: T[]): T[] =>
@@ -868,9 +1017,10 @@ export async function verifyInterviewExtraction(
  * call. Kept small so we never ask the model to emit one huge JSON object from
  * the entire document at once — the failure mode that truncates responses.
  */
-const CONSOLIDATION_BATCH_SIZE = 5;
+const CONSOLIDATION_BATCH_SIZE = env.extractionConsolidationBatchSize;
 
 export interface ConsolidationOptions {
+  mode?: ExtractionMode;
   /**
    * Reports human-readable consolidation progress. Callers also use this to
    * check for cancellation between batches by throwing from the callback.
@@ -899,17 +1049,123 @@ export async function consolidateExtractions(
     );
   }
 
-  // Build the page index from the (already page-stamped) drafts BEFORE
-  // consolidation, then backfill afterwards: the consolidation model frequently
-  // drops `sourcePages` arrays entirely, so we restore each item's page(s) from
-  // the drafts rather than depending on the model to carry them through.
+  await options.onStep?.("Consolidating drafts");
   const pageIndex = buildPageIndex(drafts);
   const quoteIndex = buildSupportingQuoteIndex(drafts);
-  const consolidated = await reduceDrafts(drafts, options);
-  // Restore the verbatim supportingQuotes consolidation drops, then fill any
-  // remaining empty page citations (including on the just-restored quotes).
+  const consolidated = mergeDraftsDeterministically(drafts);
   const withQuotes = backfillSupportingQuotes(consolidated, quoteIndex);
-  return backfillSourcePages(withQuotes, pageIndex);
+  const withPages = backfillSourcePages(withQuotes, pageIndex);
+  return (options.mode ?? DEFAULT_EXTRACTION_MODE) === "lean"
+    ? applyLeanExtractionMode(withPages)
+    : withPages;
+}
+
+function mergeDraftsDeterministically(
+  drafts: ExtractionResponse[]
+): ExtractionResponse {
+  const firstMetadataValue = (
+    select: (draft: ExtractionResponse) => string | null
+  ) => drafts.map(select).find((value) => value && value.trim()) ?? null;
+
+  const investigationScopes = drafts.map((draft) => draft.investigationScope);
+  const interviewPositions = drafts.map((draft) => draft.interviewPosition);
+  const findingReadinessItems = drafts.map((draft) => draft.findingReadiness);
+
+  return normalizeExtractionResponse({
+    intervieweeName: firstMetadataValue((draft) => draft.intervieweeName),
+    interviewDate: firstMetadataValue((draft) => draft.interviewDate),
+    role: firstMetadataValue((draft) => draft.role),
+    interviewerNames: drafts.flatMap((draft) => draft.interviewerNames),
+    extractionWarnings: [
+      ...drafts.flatMap((draft) => draft.extractionWarnings),
+      "Document-level result was consolidated deterministically to avoid long-running AI consolidation.",
+    ],
+    summary: joinDistinct(drafts.map((draft) => draft.summary)),
+    investigationScope: {
+      primaryClaimants: investigationScopes.flatMap(
+        (scope) => scope.primaryClaimants
+      ),
+      primaryAccused: investigationScopes.flatMap((scope) => scope.primaryAccused),
+      scopeSummary: joinDistinct(
+        investigationScopes.map((scope) => scope.scopeSummary)
+      ),
+      primaryAllegations: investigationScopes.flatMap(
+        (scope) => scope.primaryAllegations
+      ),
+      secondaryObservations: investigationScopes.flatMap(
+        (scope) => scope.secondaryObservations
+      ),
+      sourcePages: investigationScopes.flatMap((scope) => scope.sourcePages),
+    },
+    allegations: drafts.flatMap((draft) => draft.allegations),
+    peopleMentioned: drafts.flatMap((draft) => draft.peopleMentioned),
+    canonicalIdentities: drafts.flatMap((draft) => draft.canonicalIdentities),
+    keyEvents: drafts.flatMap((draft) => draft.keyEvents),
+    notableQuotes: drafts.flatMap((draft) => draft.notableQuotes),
+    factualStatements: drafts.flatMap((draft) => draft.factualStatements),
+    opinions: drafts.flatMap((draft) => draft.opinions),
+    assumptions: drafts.flatMap((draft) => draft.assumptions),
+    hearsay: drafts.flatMap((draft) => draft.hearsay),
+    observations: drafts.flatMap((draft) => draft.observations),
+    potentialWitnesses: drafts.flatMap((draft) => draft.potentialWitnesses),
+    consolidatedWitnesses: drafts.flatMap(
+      (draft) => draft.consolidatedWitnesses
+    ),
+    missingInformation: drafts.flatMap((draft) => draft.missingInformation),
+    followUpQuestions: drafts.flatMap((draft) => draft.followUpQuestions),
+    recommendedNextInterviews: drafts.flatMap(
+      (draft) => draft.recommendedNextInterviews
+    ),
+    riskAreas: drafts.flatMap((draft) => draft.riskAreas),
+    findingReadiness: {
+      supportableFindings: findingReadinessItems.flatMap(
+        (readiness) => readiness.supportableFindings
+      ),
+      unprovenFindings: findingReadinessItems.flatMap(
+        (readiness) => readiness.unprovenFindings
+      ),
+      evidenceToCollect: findingReadinessItems.flatMap(
+        (readiness) => readiness.evidenceToCollect
+      ),
+    },
+    investigationImpact: joinDistinct(
+      drafts.map((draft) => draft.investigationImpact)
+    ),
+    interviewPosition: {
+      classification: mostSpecificInterviewPosition(interviewPositions),
+      rationale: joinDistinct(
+        interviewPositions.map((position) => position.rationale)
+      ),
+      sourcePages: interviewPositions.flatMap((position) => position.sourcePages),
+    },
+    evidenceAssessment: drafts.flatMap((draft) => draft.evidenceAssessment),
+    pageFindings: drafts.flatMap((draft) => draft.pageFindings),
+    suggestedCaseType:
+      drafts.map((draft) => draft.suggestedCaseType).find(Boolean) ?? null,
+  });
+}
+
+function joinDistinct(values: string[]): string {
+  return uniqueTrimmed(values)
+    .filter((value) => value.length > 0)
+    .join("\n\n");
+}
+
+function mostSpecificInterviewPosition(
+  positions: ExtractionResponse["interviewPosition"][]
+): ExtractionResponse["interviewPosition"]["classification"] {
+  const classifications = positions.map((position) => position.classification);
+  const priority: ExtractionResponse["interviewPosition"]["classification"][] = [
+    "Mixed / nuanced",
+    "Supports claimant",
+    "Supports accused",
+    "Neutral witness",
+    "Unknown",
+  ];
+  return (
+    priority.find((classification) => classifications.includes(classification)) ??
+    "Unknown"
+  );
 }
 
 async function reduceDrafts(
@@ -967,7 +1223,10 @@ function chunkArray<T>(items: T[], size: number): T[][] {
   return chunks;
 }
 
-async function requestExtraction(prompt: string): Promise<ExtractionResponse> {
+async function requestExtraction(
+  prompt: string,
+  mode: ExtractionMode = DEFAULT_EXTRACTION_MODE
+): Promise<ExtractionResponse> {
   const { content, truncated } = await getExtractionProvider().complete({
     system: SYSTEM_PROMPT,
     user: prompt,
@@ -1015,7 +1274,8 @@ async function requestExtraction(prompt: string): Promise<ExtractionResponse> {
     );
   }
 
-  return normalizeExtractionResponse(validated);
+  const normalized = normalizeExtractionResponse(validated);
+  return mode === "lean" ? applyLeanExtractionMode(normalized) : normalized;
 }
 
 /**
@@ -1157,6 +1417,70 @@ type IdentityItem = ExtractionResponse["canonicalIdentities"][number];
 type InvestigationScope = ExtractionResponse["investigationScope"];
 type FindingReadiness = ExtractionResponse["findingReadiness"];
 
+const LEAN_FACT_LIMIT = 30;
+const LEAN_EVENT_LIMIT = 30;
+const LEAN_WARNING_LIMIT = 10;
+const LEAN_ROLE_LENGTH = 80;
+const LEAN_RELEVANCE_LENGTH = 180;
+
+function applyLeanExtractionMode(
+  extraction: ExtractionResponse
+): ExtractionResponse {
+  return {
+    ...extraction,
+    extractionWarnings: selectLeanWarnings(extraction.extractionWarnings),
+    allegations: extraction.allegations.map((allegation) => ({
+      ...allegation,
+      followUpQuestions: [],
+      riskAreas: allegation.riskAreas.slice(0, 3),
+      witnesses: allegation.witnesses.map((witness) => ({
+        ...witness,
+        relevance: truncateText(witness.relevance, LEAN_RELEVANCE_LENGTH),
+      })),
+    })),
+    canonicalIdentities: extraction.canonicalIdentities.map((identity) => ({
+      ...identity,
+      role: identity.role ? truncateText(identity.role, LEAN_ROLE_LENGTH) : null,
+    })),
+    keyEvents: extraction.keyEvents.slice(0, LEAN_EVENT_LIMIT),
+    notableQuotes: [],
+    factualStatements: extraction.factualStatements.slice(0, LEAN_FACT_LIMIT),
+    potentialWitnesses: extraction.potentialWitnesses.map((witness) => ({
+      ...witness,
+      relevance: truncateText(witness.relevance, LEAN_RELEVANCE_LENGTH),
+    })),
+    consolidatedWitnesses: extraction.consolidatedWitnesses.map((witness) => ({
+      ...witness,
+      whyTheyMatter: truncateText(witness.whyTheyMatter, LEAN_RELEVANCE_LENGTH),
+    })),
+    followUpQuestions: [],
+    recommendedNextInterviews: [],
+    evidenceAssessment: [],
+    pageFindings: extraction.pageFindings.map((finding) => ({
+      ...finding,
+      notableQuotes: [],
+      relevantEvents: finding.relevantEvents.slice(0, LEAN_EVENT_LIMIT),
+    })),
+  };
+}
+
+function selectLeanWarnings(warnings: string[]): string[] {
+  const actionable = uniqueTrimmed(warnings).filter(isActionableWarning);
+  return actionable.slice(0, LEAN_WARNING_LIMIT);
+}
+
+function isActionableWarning(warning: string): boolean {
+  return /speaker|attribution|pagination|page|interviewee|identity|incomplete|poor|quality|unavailable|unclear|uncertain|ambiguous|missing|unreliable|conflict/i.test(
+    warning
+  );
+}
+
+function truncateText(value: string, maxLength: number): string {
+  const trimmed = value.trim();
+  if (trimmed.length <= maxLength) return trimmed;
+  return `${trimmed.slice(0, maxLength - 3).trimEnd()}...`;
+}
+
 function normalizeAllegations(allegations: AllegationItem[]): AllegationItem[] {
   return dedupeByKey(
     allegations
@@ -1239,6 +1563,10 @@ function normalizeEvents(events: EventItem[]): EventItem[] {
         date: normalizeNullableText(event.date),
         description: event.description.trim(),
         participants: normalizePersonList(event.participants),
+        supportingQuotes: normalizeQuoteItems(
+          event.supportingQuotes,
+          SUPPORTING_QUOTE_MIN_LENGTH
+        ),
         sourcePages: normalizeSourcePages(event.sourcePages),
       }))
       .filter((event) => event.description.length > 0),

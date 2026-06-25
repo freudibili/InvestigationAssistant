@@ -21,6 +21,18 @@ function required(name: string, value: string | undefined): string {
   return value;
 }
 
+function positiveInteger(name: string, value: string | undefined, fallback: number) {
+  const parsed = Number(value ?? fallback);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    throw new Error(`Environment variable "${name}" must be a positive integer.`);
+  }
+  return parsed;
+}
+
+function booleanFlag(value: string | undefined): boolean {
+  return value === "true" || value === "1";
+}
+
 export const env = {
   get supabaseUrl() {
     return required(
@@ -46,6 +58,23 @@ export const env = {
   // Sonnet 4.6 caps output at 64K; a generous default avoids spurious
   // truncation on dense pages or large consolidation batches.
   anthropicMaxTokens: Number(process.env.ANTHROPIC_MAX_TOKENS ?? 32000),
+  get anthropicThinkingEnabled() {
+    return booleanFlag(process.env.ANTHROPIC_THINKING_ENABLED);
+  },
+  get extractionPagesPerChunk() {
+    return positiveInteger(
+      "EXTRACTION_PAGES_PER_CHUNK",
+      process.env.EXTRACTION_PAGES_PER_CHUNK,
+      4
+    );
+  },
+  get extractionConsolidationBatchSize() {
+    return positiveInteger(
+      "EXTRACTION_CONSOLIDATION_BATCH_SIZE",
+      process.env.EXTRACTION_CONSOLIDATION_BATCH_SIZE,
+      8
+    );
+  },
   // Read as a getter (not a captured constant) so a benchmark can switch
   // providers mid-process by reassigning process.env.EXTRACTION_PROVIDER.
   get extractionProvider(): "openai" | "anthropic" {

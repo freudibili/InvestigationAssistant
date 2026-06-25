@@ -14,9 +14,34 @@ pdfjs.GlobalWorkerOptions.workerSrc = new URL(
   import.meta.url
 ).toString();
 
-/** Lowercase + collapse whitespace so PDF text-layer items compare cleanly. */
 function normalize(value: string): string {
   return value.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function normalizeComparable(value: string): string {
+  let output = "";
+  let previousWasSpace = true;
+
+  for (const char of value) {
+    const normalized = char
+      .normalize("NFD")
+      .replace(/\p{Diacritic}/gu, "")
+      .replace(/[’‘`´]/g, "'")
+      .toLowerCase();
+
+    if (!normalized) continue;
+    if (/\s/.test(normalized)) {
+      if (!previousWasSpace) output += " ";
+      previousWasSpace = true;
+      continue;
+    }
+    if (/[\p{P}\p{S}]/u.test(normalized)) continue;
+
+    output += normalized;
+    previousWasSpace = false;
+  }
+
+  return output.trim();
 }
 
 function escapeHtml(value: string): string {
@@ -35,15 +60,31 @@ function escapeHtml(value: string): string {
  * text layer can't be matched (scanned/OCR'd pages, reflowed text) the page is
  * still shown at the right location.
  */
+export type SourcePdfViewerProps = {
+  documentId: string;
+  page: number;
+  quoteId?: string;
+  charStart?: number | null;
+  charEnd?: number | null;
+  pageCharStart?: number | null;
+  pageCharEnd?: number | null;
+  normalizedPageCharStart?: number | null;
+  normalizedPageCharEnd?: number | null;
+  quote?: string | null;
+};
+
 export function SourcePdfViewer({
   documentId,
   page,
+  quoteId,
+  charStart,
+  charEnd,
+  pageCharStart,
+  pageCharEnd,
+  normalizedPageCharStart,
+  normalizedPageCharEnd,
   quote,
-}: {
-  documentId: string;
-  page: number;
-  quote?: string | null;
-}) {
+}: SourcePdfViewerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState<number>(0);
   const [numPages, setNumPages] = useState<number | null>(null);
@@ -56,10 +97,7 @@ export function SourcePdfViewer({
     [documentId]
   );
 
-  const normalizedQuote = useMemo(
-    () => (quote ? normalize(quote) : null),
-    [quote]
-  );
+  const normalizedQuote = useMemo(() => (quote ? normalize(quote) : null), [quote]);
 
   useEffect(() => {
     const element = containerRef.current;
@@ -72,21 +110,42 @@ export function SourcePdfViewer({
     return () => observer.disconnect();
   }, []);
 
-  // Highlight text-layer items that overlap the quote (either the item is part
-  // of the quote, or the whole quote sits inside one item). Returns HTML that
-  // react-pdf injects into the text layer.
   const textRenderer = useMemo(() => {
-    if (!normalizedQuote) return undefined;
-    return ({ str }: { str: string }) => {
-      const item = normalize(str);
+    if (
+      normalizedPageCharStart === null ||
+      normalizedPageCharStart === undefined ||
+      normalizedPageCharEnd === null ||
+      normalizedPageCharEnd === undefined ||
+      normalizedPageCharEnd <= normalizedPageCharStart
+    ) {
+      if (!normalizedQuote) return undefined;
+      return ({ str }: { str: string }) => {
+        const item = normalize(str);
+        const overlaps =
+          (item.length >= 4 && normalizedQuote.includes(item)) ||
+          (normalizedQuote.length >= 4 && item.includes(normalizedQuote));
+        return overlaps
+          ? `<mark class="source-quote-highlight">${escapeHtml(str)}</mark>`
+          : escapeHtml(str);
+      };
+    }
+
+    let cursor = 0;
+    return ({ str, itemIndex }: { str: string; itemIndex: number }) => {
+      if (itemIndex === 0) cursor = 0;
+      const normalizedText = normalizeComparable(str);
+      const start = cursor;
+      const end = cursor + normalizedText.length;
+      cursor = end + (normalizedText.length > 0 ? 1 : 0);
       const overlaps =
-        (item.length >= 4 && normalizedQuote.includes(item)) ||
-        (normalizedQuote.length >= 4 && item.includes(normalizedQuote));
+        normalizedText.length > 0 &&
+        start < normalizedPageCharEnd &&
+        end > normalizedPageCharStart;
       return overlaps
         ? `<mark class="source-quote-highlight">${escapeHtml(str)}</mark>`
         : escapeHtml(str);
     };
-  }, [normalizedQuote]);
+  }, [normalizedPageCharEnd, normalizedPageCharStart, normalizedQuote]);
 
   const safePage = numPages ? Math.min(Math.max(page, 1), numPages) : page;
 
@@ -129,7 +188,7 @@ export function SourcePdfViewer({
         >
           {width > 0 ? (
             <Page
-              key={`${documentId}-${safePage}`}
+              key={`${documentId}-${safePage}-${quoteId ?? ""}-${charStart ?? ""}-${charEnd ?? ""}-${pageCharStart ?? ""}-${pageCharEnd ?? ""}-${normalizedPageCharStart ?? ""}-${normalizedPageCharEnd ?? ""}`}
               pageNumber={safePage}
               width={Math.min(width - 32, 900)}
               customTextRenderer={textRenderer}

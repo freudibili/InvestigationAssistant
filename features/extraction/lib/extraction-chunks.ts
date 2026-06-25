@@ -1,5 +1,7 @@
 import "server-only";
 
+import { env } from "@/lib/env";
+
 export interface ExtractionChunk {
   label: string;
   pageStart: number | null;
@@ -18,7 +20,7 @@ const PAGE_MARKER_RE = /(?:^|\n)\s*--- Page (\d+) ---\s*\n/g;
  * calls concurrently (see `EXTRACTION_CONCURRENCY`), so accuracy never trades
  * off against speed.
  */
-const PAGES_PER_CHUNK = 2;
+const PAGES_PER_CHUNK = env.extractionPagesPerChunk;
 
 /**
  * How many source pages a chunk covers. Used only to seed the resume progress

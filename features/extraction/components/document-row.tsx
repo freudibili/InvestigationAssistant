@@ -273,7 +273,7 @@ function StepIcon({ status }: { status: StepStatus }) {
  * `PAGES_PER_CHUNK` so each step maps to a single extraction call and the
  * checklist ticks off in the same page groups the document is extracted in.
  */
-const DISPLAY_PAGES_PER_GROUP = 2;
+const DISPLAY_PAGES_PER_GROUP = 4;
 
 function getExtractionSteps(
   document: CaseDocument,
@@ -286,7 +286,9 @@ function getExtractionSteps(
   const isConverting = /^Converting\b/i.test(currentMessage);
   const isPreparing = /^(Prepared\b|Preparing)/i.test(currentMessage);
   const isVerifying =
-    /^(Verifying|Consolidating|Merging|Retrying)\b/i.test(currentMessage);
+    /^(Verifying|Consolidating|Grounding|Saving|Merging|Retrying)\b/i.test(
+      currentMessage
+    );
   const isExtractingSourceUnit = /^Extracting\b/i.test(currentMessage);
   // Non-PDF uploads are converted to a paginated PDF first; surface that as the
   // leading step. The original file name keeps its extension after conversion,

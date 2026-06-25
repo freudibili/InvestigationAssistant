@@ -3,6 +3,12 @@ import type { CaseDocument, ExtractedData } from "@/lib/types";
 import type { QuoteRef, SourceRef } from "@/features/investigation-analysis/types";
 
 type Quote = ExtractedData["notableQuotes"][number];
+type QuoteProvenance = NonNullable<Quote["provenance"]>;
+type ClickableQuoteProvenance = QuoteProvenance & {
+  pageNumber: number;
+  charStart: number;
+  charEnd: number;
+};
 
 /** The cited source pdf name (a converted non-PDF is served as `.pdf`). */
 export function sourceDocumentName(document: CaseDocument): string {
@@ -41,6 +47,19 @@ export function normalizeText(value: string): string {
   return value.toLowerCase().replace(/\s+/g, " ").trim();
 }
 
+function isClickableQuoteProvenance(
+  provenance: QuoteProvenance | undefined
+): provenance is ClickableQuoteProvenance {
+  return Boolean(
+    provenance?.verified &&
+      provenance.pageNumber !== null &&
+      provenance.charStart !== null &&
+      provenance.charEnd !== null &&
+      (provenance.sourceStatus === "verified" ||
+        provenance.sourceStatus === "fuzzy_verified")
+  );
+}
+
 /** Build a clickable page reference for a non-quote item (timeline event). */
 export function sourceRefFor(
   document: CaseDocument,
@@ -74,6 +93,7 @@ export function buildDocumentQuotes(
   const collected: Quote[] = [
     ...(data.notableQuotes ?? []),
     ...(data.factualStatements ?? []).flatMap((f) => f.supportingQuotes ?? []),
+    ...(data.keyEvents ?? []).flatMap((e) => e.supportingQuotes ?? []),
     ...(data.potentialWitnesses ?? []).flatMap((w) => w.supportingQuotes ?? []),
     ...(data.allegations ?? []).flatMap((a) => [
       ...(a.relevantQuotes ?? []),
@@ -90,13 +110,16 @@ export function buildDocumentQuotes(
     const key = normalizeText(text);
     if (seen.has(key)) continue;
 
-    const { page } = parseFirstPage(quote.sourcePages);
+    const provenance = isClickableQuoteProvenance(quote.provenance)
+      ? quote.provenance
+      : null;
     seq += 1;
     seen.set(key, {
       id: `q${docIndex}_${seq}`,
+      provenanceId: provenance?.id ?? null,
       text,
       speaker: quote.speaker?.trim() || null,
-      page,
+      page: provenance?.pageNumber ?? null,
       documentId: document.id,
       documentName,
     });
