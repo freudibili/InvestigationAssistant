@@ -286,7 +286,7 @@ function getExtractionSteps(
   const isConverting = /^Converting\b/i.test(currentMessage);
   const isPreparing = /^(Prepared\b|Preparing)/i.test(currentMessage);
   const isVerifying =
-    /^(Verifying|Consolidating|Grounding|Saving|Merging|Retrying)\b/i.test(
+    /^(Verifying|Consolidating|Grounding|Classifying|Saving|Merging|Retrying)\b/i.test(
       currentMessage
     );
   const isExtractingSourceUnit = /^Extracting\b/i.test(currentMessage);

@@ -9,8 +9,10 @@ import {
 import { Badge } from "@/components/ui/badge";
 import {
   AlertTriangle,
+  BriefcaseBusiness,
   CalendarClock,
   CircleHelp,
+  Eye,
   FileText,
   ListChecks,
   MessageSquareQuote,
@@ -28,6 +30,7 @@ import type { CaseDocument, ExtractedData } from "@/lib/types";
 
 type QuoteItem = ExtractedData["notableQuotes"][number];
 type WitnessItem = ExtractedData["potentialWitnesses"][number];
+type EvidenceItem = ExtractedData["observations"][number];
 type SourceContext = {
   caseId: string;
   documentId: string;
@@ -327,6 +330,39 @@ function QuoteList({
   );
 }
 
+function EvidenceList({
+  items,
+  source,
+}: {
+  items: EvidenceItem[];
+  source: SourceContext;
+}) {
+  return (
+    <ul className="space-y-3 text-sm">
+      {items.map((item, index) => (
+        <li key={index} className="space-y-1.5 leading-relaxed">
+          <p>{item.description}</p>
+          <SourceBadges pages={item.sourcePages} source={source} />
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function uniqueEvidenceItems(items: EvidenceItem[]): EvidenceItem[] {
+  const seen = new Set<string>();
+  const unique: EvidenceItem[] = [];
+
+  for (const item of items) {
+    const key = `${item.description.trim().toLowerCase()}|${item.sourcePages.join(",")}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(item);
+  }
+
+  return unique;
+}
+
 function SectionCard({
   title,
   count,
@@ -424,6 +460,18 @@ export function ExtractionResult({
   const extractionWarnings = data.extractionWarnings ?? [];
   const allegations = data.allegations ?? [];
   const facts = data.factualStatements ?? [];
+  const observations = data.observations ?? [];
+  const contextItems = [
+    ...(data.opinions ?? []),
+    ...(data.assumptions ?? []),
+    ...(data.hearsay ?? []),
+  ];
+  const referencedEvidence = uniqueEvidenceItems(
+    (data.pageFindings ?? []).flatMap((finding) => [
+      ...(finding.supportingEvidence ?? []),
+      ...(finding.contradictoryEvidence ?? []),
+    ])
+  );
   const peopleMentioned = data.peopleMentioned ?? [];
   const events = data.keyEvents ?? [];
   const witnesses = data.potentialWitnesses ?? [];
@@ -518,6 +566,42 @@ export function ExtractionResult({
             </ul>
           ) : (
             <EmptyState>No factual statements extracted.</EmptyState>
+          )}
+        </SectionCard>
+
+        <SectionCard
+          title="Interviewee Observations"
+          count={observations.length}
+          icon={Eye}
+        >
+          {observations.length > 0 ? (
+            <EvidenceList items={observations} source={source} />
+          ) : (
+            <EmptyState>No interviewee observations extracted.</EmptyState>
+          )}
+        </SectionCard>
+
+        <SectionCard
+          title="Context"
+          count={contextItems.length}
+          icon={BriefcaseBusiness}
+        >
+          {contextItems.length > 0 ? (
+            <EvidenceList items={contextItems} source={source} />
+          ) : (
+            <EmptyState>No context items extracted.</EmptyState>
+          )}
+        </SectionCard>
+
+        <SectionCard
+          title="Referenced Evidence"
+          count={referencedEvidence.length}
+          icon={FileText}
+        >
+          {referencedEvidence.length > 0 ? (
+            <EvidenceList items={referencedEvidence} source={source} />
+          ) : (
+            <EmptyState>No referenced evidence extracted.</EmptyState>
           )}
         </SectionCard>
 

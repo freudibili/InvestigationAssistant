@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { classifyExtractedItems } from "@/features/extraction/lib/classify-extracted-items";
 import { convertTextToPaginatedPdf } from "@/features/extraction/lib/pdf-convert";
 import {
   chunkPageSpan,
@@ -269,11 +270,26 @@ export async function extractDocumentAction(
       runId,
       currentStep: totalPages,
       totalSteps,
+      step: "Classifying extracted items",
+    });
+    await assertExtractionIsActive(documentId, runId);
+
+    const classified = await classifyExtractedItems({
+      extractedData: grounded,
+      rawText,
+    });
+    await assertExtractionIsActive(documentId, runId);
+
+    await setExtractionProgress({
+      id: documentId,
+      runId,
+      currentStep: totalPages,
+      totalSteps,
       step: "Saving extraction result",
     });
     await assertExtractionIsActive(documentId, runId);
 
-    const updated = await saveExtractionResult(documentId, runId, grounded, {
+    const updated = await saveExtractionResult(documentId, runId, classified, {
       currentStep: totalSteps,
       totalSteps,
       step: "Verified extraction",
