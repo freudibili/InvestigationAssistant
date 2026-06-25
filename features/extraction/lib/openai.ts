@@ -9,7 +9,7 @@ import type { ExtractionResponse } from "@/lib/validation";
 import {
   splitChunkIntoSinglePages,
   type ExtractionChunk,
-} from "@/lib/extraction-chunks";
+} from "@/features/extraction/lib/extraction-chunks";
 
 let client: OpenAI | null = null;
 

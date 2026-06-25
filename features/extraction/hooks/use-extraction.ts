@@ -5,10 +5,8 @@ import { queryKeys } from "@/lib/query-keys";
 import { fetchJson } from "@/lib/api/fetcher";
 import {
   cancelExtractionAction,
-  deleteDocumentAction,
   extractDocumentAction,
-  uploadDocumentAction,
-} from "@/app/actions/documents";
+} from "@/features/extraction/actions/extraction";
 import type { Case, CaseDocument } from "@/lib/types";
 
 interface CaseResponse {
@@ -18,47 +16,6 @@ interface CaseResponse {
 
 interface DocumentResponse {
   document: CaseDocument;
-}
-
-export function useUploadDocument(caseId: string) {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (file: File) => {
-      const formData = new FormData();
-      formData.append("caseId", caseId);
-      formData.append("file", file);
-      return uploadDocumentAction(formData);
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.case(caseId) });
-    },
-  });
-}
-
-export function useDeleteDocument(caseId: string) {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (documentId: string) => deleteDocumentAction(documentId),
-    onMutate: async (documentId) => {
-      await queryClient.cancelQueries({ queryKey: queryKeys.case(caseId) });
-      queryClient.setQueryData<CaseResponse>(
-        queryKeys.case(caseId),
-        (current) => {
-          if (!current) return current;
-
-          return {
-            ...current,
-            documents: current.documents.filter(
-              (document) => document.id !== documentId
-            ),
-          };
-        }
-      );
-    },
-    onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.case(caseId) });
-    },
-  });
 }
 
 export function useExtractDocument(caseId: string) {

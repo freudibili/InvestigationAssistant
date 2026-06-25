@@ -11,6 +11,8 @@ export function mapCase(row: CaseRow): Case {
     companyName: row.company_name,
     caseType: row.case_type,
     caseTypeSource: row.case_type_source,
+    investigationAnalysisStatus: row.investigation_analysis_status ?? "idle",
+    investigationAnalysisAt: row.investigation_analysis_at,
     createdAt: row.created_at,
   };
 }

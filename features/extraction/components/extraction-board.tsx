@@ -1,13 +1,14 @@
 "use client";
 
-import { DocumentRow } from "@/components/documents/document-row";
+import { DocumentRow } from "@/features/extraction/components/document-row";
 import type { CaseDocument } from "@/lib/types";
 
-export function DocumentList({ documents }: { documents: CaseDocument[] }) {
+export function ExtractionBoard({ documents }: { documents: CaseDocument[] }) {
   if (documents.length === 0) {
     return (
       <p className="text-muted-foreground rounded-lg border border-dashed p-6 text-center text-sm">
-        No documents yet. Upload interview transcripts to get started.
+        No documents to extract yet. Upload interview transcripts in the
+        Documents tab to get started.
       </p>
     );
   }

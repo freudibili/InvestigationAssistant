@@ -15,6 +15,16 @@ const nullableMetadataString = z.preprocess((value) => {
   return trimmed;
 }, z.string().nullable());
 
+// `z.string().default("")` only fills in for `undefined`, but the model
+// regularly emits an explicit `null` for free-text fields it has nothing to
+// say about (e.g. scopeSummary on a transcript with no clear scope). Coerce any
+// non-string value to the fallback so one null doesn't fail the whole document.
+const stringWithDefault = (fallback = "") =>
+  z.preprocess(
+    (value) => (typeof value === "string" ? value : fallback),
+    z.string()
+  );
+
 const sourcePagesSchema = z.array(z.string()).default([]);
 
 // The model is asked for `{ description, sourcePages }` objects, but for some
@@ -109,7 +119,7 @@ const investigationAssessmentSchema = z.object({
 const investigationScopeSchema = z.object({
   primaryClaimants: z.array(z.string()).default([]),
   primaryAccused: z.array(z.string()).default([]),
-  scopeSummary: z.string().default(""),
+  scopeSummary: stringWithDefault(""),
   primaryAllegations: z.array(z.string()).default([]),
   secondaryObservations: z.array(z.string()).default([]),
   sourcePages: sourcePagesSchema,
@@ -190,7 +200,7 @@ export const extractedDataSchema = z.object({
   role: nullableMetadataString,
   interviewerNames: z.array(z.string()).default([]),
   extractionWarnings: z.array(z.string()).default([]),
-  summary: z.string().default(""),
+  summary: stringWithDefault(""),
   investigationScope: investigationScopeSchema.default({
     primaryClaimants: [],
     primaryAccused: [],
@@ -222,7 +232,7 @@ export const extractedDataSchema = z.object({
     unprovenFindings: [],
     evidenceToCollect: [],
   }),
-  investigationImpact: z.string().default(""),
+  investigationImpact: stringWithDefault(""),
   interviewPosition: interviewPositionSchema.default({
     classification: "Unknown",
     rationale: "No interview position could be determined from the source.",

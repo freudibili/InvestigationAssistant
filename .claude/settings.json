@@ -17,7 +17,13 @@
       "Bash(ps -p 27683 -o command=)",
       "Bash(sed -i '' 's/const MAX_CHUNK_CHARS = 12000;/const MAX_CHUNK_CHARS = 20000;/' grouptest.mjs)",
       "Bash(node grouptest.mjs)",
-      "Bash(node /private/tmp/claude-501/-Users-fredericwatare-Documents-Development-InvestigationAssistant/b57d5084-0a2b-4aaf-b385-658ff05ff5a1/scratchpad/t.mjs)"
+      "Bash(node /private/tmp/claude-501/-Users-fredericwatare-Documents-Development-InvestigationAssistant/b57d5084-0a2b-4aaf-b385-658ff05ff5a1/scratchpad/t.mjs)",
+      "Bash(git mv *)",
+      "Bash(git rm *)",
+      "Bash(mkdir -p \"app/cases/[caseId]/extraction\")",
+      "Bash(rmdir \"app/cases/[caseId]/documents/[documentId]\" \"app/cases/[caseId]/documents\")",
+      "Bash(node -e \"const p=require\\('react-pdf/package.json'\\); console.log\\('main',p.main\\); console.log\\('exports',JSON.stringify\\(p.exports,null,1\\)\\)\")",
+      "Bash(echo \"EXIT $?\")"
     ]
   }
 }

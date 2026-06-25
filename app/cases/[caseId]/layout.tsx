@@ -2,13 +2,15 @@ import { notFound } from "next/navigation";
 
 import { getCase } from "@/lib/db/cases";
 import { listDocumentsForCase } from "@/lib/db/documents";
-import { DocumentsPanel } from "@/features/documents/components/documents-panel";
+import { CaseChrome } from "@/components/cases/case-chrome";
 
 export const dynamic = "force-dynamic";
 
-export default async function CaseDocumentsPage({
+export default async function CaseLayout({
+  children,
   params,
 }: {
+  children: React.ReactNode;
   params: Promise<{ caseId: string }>;
 }) {
   const { caseId } = await params;
@@ -18,10 +20,12 @@ export default async function CaseDocumentsPage({
   const documents = await listDocumentsForCase(caseId);
 
   return (
-    <DocumentsPanel
+    <CaseChrome
       caseId={caseId}
       initialCase={investigationCase}
       initialDocuments={documents}
-    />
+    >
+      {children}
+    </CaseChrome>
   );
 }

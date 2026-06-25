@@ -10,7 +10,7 @@ import {
   SUPPORTED_LABEL,
   UPLOAD_ACCEPT,
 } from "@/lib/documents";
-import { useUploadDocument } from "@/hooks/use-documents";
+import { useUploadDocument } from "@/features/documents/hooks/use-documents";
 
 export function UploadDocument({ caseId }: { caseId: string }) {
   const inputRef = useRef<HTMLInputElement>(null);

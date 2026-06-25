@@ -1,10 +1,19 @@
 import type {
+  AnalysisStatus,
   CaseType,
   CaseTypeSource,
   DocumentStatus,
   ExtractedData,
   ExtractionDraftGroup,
 } from "@/lib/types";
+
+export type Json =
+  | string
+  | number
+  | boolean
+  | null
+  | { [key: string]: Json | undefined }
+  | Json[];
 
 /**
  * Hand-maintained typing for the Supabase schema. When the project grows you
@@ -20,6 +29,10 @@ export type Database = {
           company_name: string;
           case_type: CaseType | null;
           case_type_source: CaseTypeSource | null;
+          investigation_analysis: Json | null;
+          investigation_analysis_status: AnalysisStatus | null;
+          investigation_analysis_run_id: string | null;
+          investigation_analysis_at: string | null;
           created_at: string;
         };
         Insert: {
@@ -28,6 +41,10 @@ export type Database = {
           company_name: string;
           case_type?: CaseType | null;
           case_type_source?: CaseTypeSource | null;
+          investigation_analysis?: Json | null;
+          investigation_analysis_status?: AnalysisStatus | null;
+          investigation_analysis_run_id?: string | null;
+          investigation_analysis_at?: string | null;
           created_at?: string;
         };
         Update: Partial<Database["public"]["Tables"]["cases"]["Insert"]>;

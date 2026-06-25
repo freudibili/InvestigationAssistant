@@ -38,6 +38,16 @@ export const DOCUMENT_STATUSES = [
 
 export type DocumentStatus = (typeof DOCUMENT_STATUSES)[number];
 
+export const ANALYSIS_STATUSES = [
+  "idle",
+  "analyzing",
+  "ready",
+  "failed",
+] as const;
+
+/** Lifecycle of a case's cross-interview Investigation Analysis. */
+export type AnalysisStatus = (typeof ANALYSIS_STATUSES)[number];
+
 /** Structured data returned by the AI extraction step. */
 export type ExtractedData = z.infer<typeof extractedDataSchema>;
 
@@ -61,6 +71,10 @@ export interface Case {
   companyName: string;
   caseType: CaseType | null;
   caseTypeSource: CaseTypeSource | null;
+  /** Status of the case's cross-interview analysis. The heavy result JSON is
+   * loaded separately (it isn't carried on the lightweight case object). */
+  investigationAnalysisStatus: AnalysisStatus;
+  investigationAnalysisAt: string | null;
   createdAt: string;
 }
 

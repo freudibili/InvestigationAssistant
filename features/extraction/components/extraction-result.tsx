@@ -8,16 +8,9 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import {
   AlertTriangle,
   CalendarClock,
   CircleHelp,
-  ExternalLink,
   FileText,
   ListChecks,
   MessageSquareQuote,
@@ -26,7 +19,10 @@ import {
   Users,
 } from "lucide-react";
 import type * as React from "react";
-import { createContext, useContext, useState } from "react";
+import {
+  SourceViewerProvider,
+  useSourceViewer,
+} from "@/components/pdf/source-viewer-dialog";
 import { getExtension, getSupportedExtension } from "@/lib/documents";
 import type { CaseDocument, ExtractedData } from "@/lib/types";
 
@@ -47,23 +43,8 @@ type PageReference = {
   pageStart: number;
 };
 
-type SourceViewerTarget = {
-  documentId: string;
-  documentName: string;
-  label: string;
-  pageStart: number;
-};
-
-const SourceViewerContext = createContext<
-  ((target: SourceViewerTarget) => void) | null
->(null);
-
 /** Collapse a section behind a <details> once it grows past this many items. */
 const COLLAPSE_THRESHOLD = 12;
-
-function sourceHref(documentId: string, pageStart: number) {
-  return `/api/documents/${documentId}/source?page=${pageStart}`;
-}
 
 /**
  * The name to show for the cited source. When the stored object is a paginated
@@ -75,53 +56,6 @@ function sourceDisplayName(fileName: string, isPdfSource: boolean): string {
   if (!isPdfSource || ext === ".pdf") return fileName;
   const base = ext ? fileName.slice(0, -ext.length) : fileName;
   return `${base}.pdf`;
-}
-
-/**
- * Renders the source PDF inside a modal, jumped to the cited page. The API
- * route 302-redirects to a signed URL ending in `#page=N`, which the browser's
- * PDF viewer honors inside the iframe.
- */
-function SourceViewerDialog({
-  target,
-  onClose,
-}: {
-  target: SourceViewerTarget | null;
-  onClose: () => void;
-}) {
-  return (
-    <Dialog open={target !== null} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="flex h-[88vh] max-w-[min(96vw,72rem)] flex-col gap-3 p-4 sm:max-w-[min(96vw,72rem)]">
-        {target ? (
-          <>
-            <DialogHeader className="pr-8">
-              <DialogTitle className="flex flex-wrap items-center gap-2 text-base">
-                <span className="truncate">{target.documentName}</span>
-                <span className="text-muted-foreground font-normal">
-                  · {target.label}
-                </span>
-                <a
-                  href={sourceHref(target.documentId, target.pageStart)}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-muted-foreground hover:text-foreground inline-flex items-center gap-1 text-xs font-normal"
-                >
-                  <ExternalLink className="size-3.5" />
-                  Open in new tab
-                </a>
-              </DialogTitle>
-            </DialogHeader>
-            <iframe
-              key={`${target.documentId}-${target.pageStart}`}
-              src={sourceHref(target.documentId, target.pageStart)}
-              title={`${target.documentName} · ${target.label}`}
-              className="min-h-0 w-full flex-1 rounded-md border"
-            />
-          </>
-        ) : null}
-      </DialogContent>
-    </Dialog>
-  );
 }
 
 function Field({ label, value }: { label: string; value: string | null }) {
@@ -150,9 +84,12 @@ function Field({ label, value }: { label: string; value: string | null }) {
 function SourceBadges({
   pages,
   source,
+  quote,
 }: {
   pages?: string[];
   source: SourceContext;
+  /** When the cited item is a quote, its verbatim text — highlighted in the PDF. */
+  quote?: string;
 }) {
   const pageReferences = (pages ?? [])
     .map(parsePageReference)
@@ -173,7 +110,12 @@ function SourceBadges({
   return (
     <span className="inline-flex flex-wrap gap-1.5">
       {pageReferences.map((page) => (
-        <SourcePageBadge key={page.label} page={page} source={source} />
+        <SourcePageBadge
+          key={page.label}
+          page={page}
+          source={source}
+          quote={quote}
+        />
       ))}
     </span>
   );
@@ -182,11 +124,13 @@ function SourceBadges({
 function SourcePageBadge({
   page,
   source,
+  quote,
 }: {
   page: PageReference;
   source: SourceContext;
+  quote?: string;
 }) {
-  const openViewer = useContext(SourceViewerContext);
+  const openViewer = useSourceViewer();
 
   return (
     <button
@@ -196,7 +140,8 @@ function SourcePageBadge({
           documentId: source.documentId,
           documentName: source.documentName,
           label: page.label,
-          pageStart: page.pageStart,
+          page: page.pageStart,
+          quote,
         })
       }
       title={`Open ${source.documentName} at ${page.label}`}
@@ -275,7 +220,11 @@ function Quote({
         ) : null}
         “{quote.text}”
       </p>
-      <SourceBadges pages={quote.sourcePages} source={source} />
+      <SourceBadges
+        pages={quote.sourcePages}
+        source={source}
+        quote={quote.text}
+      />
     </blockquote>
   );
 }
@@ -381,9 +330,6 @@ export function ExtractionResult({
     documentName: sourceDisplayName(document.fileName, isPdfSource),
     paginationAvailable: isPdfSource,
   };
-  const [viewerTarget, setViewerTarget] = useState<SourceViewerTarget | null>(
-    null
-  );
 
   if (!data) {
     return (
@@ -406,11 +352,7 @@ export function ExtractionResult({
   const followUpQuestions = data.followUpQuestions ?? [];
 
   return (
-    <SourceViewerContext.Provider value={setViewerTarget}>
-      <SourceViewerDialog
-        target={viewerTarget}
-        onClose={() => setViewerTarget(null)}
-      />
+    <SourceViewerProvider>
       <div className="space-y-6">
         {/* 1. Document Information */}
         <SectionCard title="Document Information" icon={FileText}>
@@ -611,6 +553,6 @@ export function ExtractionResult({
           )}
         </SectionCard>
       </div>
-    </SourceViewerContext.Provider>
+    </SourceViewerProvider>
   );
 }

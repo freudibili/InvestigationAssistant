@@ -2,11 +2,11 @@ import { notFound } from "next/navigation";
 
 import { getCase } from "@/lib/db/cases";
 import { listDocumentsForCase } from "@/lib/db/documents";
-import { DocumentsPanel } from "@/features/documents/components/documents-panel";
+import { ExtractionPanel } from "@/features/extraction/components/extraction-panel";
 
 export const dynamic = "force-dynamic";
 
-export default async function CaseDocumentsPage({
+export default async function CaseExtractionPage({
   params,
 }: {
   params: Promise<{ caseId: string }>;
@@ -18,7 +18,7 @@ export default async function CaseDocumentsPage({
   const documents = await listDocumentsForCase(caseId);
 
   return (
-    <DocumentsPanel
+    <ExtractionPanel
       caseId={caseId}
       initialCase={investigationCase}
       initialDocuments={documents}

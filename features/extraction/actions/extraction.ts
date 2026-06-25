@@ -1,29 +1,22 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { extractDocumentText } from "@/lib/extract-text";
-import { convertTextToPaginatedPdf } from "@/lib/pdf-convert";
+import { convertTextToPaginatedPdf } from "@/features/extraction/lib/pdf-convert";
 import {
   chunkPageSpan,
   createExtractionChunks,
   type ExtractionChunk,
-} from "@/lib/extraction-chunks";
-import {
-  getSupportedExtension,
-  isSupportedDocument,
-  SUPPORTED_LABEL,
-} from "@/lib/documents";
+} from "@/features/extraction/lib/extraction-chunks";
+import { getSupportedExtension } from "@/lib/documents";
 import {
   consolidateExtractions,
   ExtractionError,
   extractInterviewChunkWithFallback,
   parseStoredDrafts,
-} from "@/lib/openai";
+} from "@/features/extraction/lib/openai";
 import { suggestCaseType } from "@/lib/db/cases";
 import {
-  createDocumentFromUpload,
   cancelDocumentExtraction,
-  deleteDocument,
   getDocument,
   getDocumentExtractionDrafts,
   getDocumentExtractionRunState,
@@ -40,8 +33,6 @@ import type {
   ExtractionResponse,
 } from "@/lib/types";
 
-const MAX_FILE_BYTES = 20 * 1024 * 1024; // 20 MB
-
 class ExtractionCanceledError extends Error {
   constructor(message = "Extraction canceled.") {
     super(message);
@@ -49,68 +40,12 @@ class ExtractionCanceledError extends Error {
   }
 }
 
-/**
- * Upload a single document (PDF, TXT, DOC, or DOCX) to a case. Its text is
- * extracted immediately and stored in `rawText`; AI extraction is deliberately
- * NOT run here.
- */
-export async function uploadDocumentAction(
-  formData: FormData
-): Promise<CaseDocument> {
-  const caseId = formData.get("caseId");
-  const file = formData.get("file");
-
-  if (typeof caseId !== "string" || !caseId) {
-    throw new Error("Missing case id.");
-  }
-  if (!(file instanceof File)) {
-    throw new Error("No file provided.");
-  }
-  if (!isSupportedDocument(file.name)) {
-    throw new Error(`Unsupported file type. Allowed: ${SUPPORTED_LABEL}.`);
-  }
-  if (file.size === 0) {
-    throw new Error("The uploaded file is empty.");
-  }
-  if (file.size > MAX_FILE_BYTES) {
-    throw new Error("File is too large (max 20 MB).");
-  }
-
-  const bytes = await file.arrayBuffer();
-
-  let rawText = "";
-  try {
-    rawText = await extractDocumentText(file.name, bytes);
-  } catch {
-    throw new Error("Could not read text from this document.");
-  }
-
-  const document = await createDocumentFromUpload({
-    caseId,
-    fileName: file.name,
-    fileBytes: bytes,
-    rawText,
-  });
-
-  revalidatePath(`/cases/${caseId}`);
-  return document;
-}
-
-/**
- * Permanently delete a document and its stored file. Triggered by the
- * investigator from the document list.
- */
-export async function deleteDocumentAction(documentId: string): Promise<void> {
-  const { caseId } = await deleteDocument(documentId);
-  revalidatePath(`/cases/${caseId}`);
-}
-
 export async function cancelExtractionAction(
   documentId: string
 ): Promise<CaseDocument> {
   const document = await cancelDocumentExtraction(documentId);
-  revalidatePath(`/cases/${document.caseId}`);
-  revalidatePath(`/cases/${document.caseId}/documents/${documentId}`);
+  revalidatePath(`/cases/${document.caseId}/extraction`);
+  revalidatePath(`/cases/${document.caseId}/extraction/${documentId}`);
   return document;
 }
 
@@ -148,7 +83,7 @@ export async function extractDocumentAction(
 
   if (!document.rawText || document.rawText.trim().length === 0) {
     await setDocumentStatus(documentId, "failed");
-    revalidatePath(`/cases/${document.caseId}`);
+    revalidatePath(`/cases/${document.caseId}/extraction`);
     return {
       ok: false,
       canceled: false,
@@ -158,7 +93,7 @@ export async function extractDocumentAction(
 
   const runId = crypto.randomUUID();
   await startDocumentExtraction(documentId, runId);
-  revalidatePath(`/cases/${document.caseId}`);
+  revalidatePath(`/cases/${document.caseId}/extraction`);
 
   try {
     // Always work from a real, paginated PDF so the whole document is extracted
@@ -324,20 +259,20 @@ export async function extractDocumentAction(
       await suggestCaseType(document.caseId, suggestedCaseType);
     }
 
-    revalidatePath(`/cases/${document.caseId}`);
-    revalidatePath(`/cases/${document.caseId}/documents/${documentId}`);
+    revalidatePath(`/cases/${document.caseId}/extraction`);
+    revalidatePath(`/cases/${document.caseId}/extraction/${documentId}`);
     return { ok: true, document: updated };
   } catch (error) {
     if (error instanceof ExtractionCanceledError) {
-      revalidatePath(`/cases/${document.caseId}`);
-      revalidatePath(`/cases/${document.caseId}/documents/${documentId}`);
+      revalidatePath(`/cases/${document.caseId}/extraction`);
+      revalidatePath(`/cases/${document.caseId}/extraction/${documentId}`);
       return { ok: false, canceled: true, message: error.message };
     }
 
     const state = await getDocumentExtractionRunState(documentId);
     if (state.status === "canceled" || state.extractionRunId !== runId) {
-      revalidatePath(`/cases/${document.caseId}`);
-      revalidatePath(`/cases/${document.caseId}/documents/${documentId}`);
+      revalidatePath(`/cases/${document.caseId}/extraction`);
+      revalidatePath(`/cases/${document.caseId}/extraction/${documentId}`);
       return {
         ok: false,
         canceled: true,
@@ -349,7 +284,7 @@ export async function extractDocumentAction(
     // then return only a safe, human-readable message.
     logExtractionFailure({ documentId, runId, error });
     await setDocumentStatus(documentId, "failed");
-    revalidatePath(`/cases/${document.caseId}`);
+    revalidatePath(`/cases/${document.caseId}/extraction`);
     return {
       ok: false,
       canceled: false,

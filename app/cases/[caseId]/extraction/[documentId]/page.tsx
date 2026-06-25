@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 
 import { getDocument } from "@/lib/db/documents";
-import { ExtractionResult } from "@/components/documents/extraction-result";
+import { ExtractionResult } from "@/features/extraction/components/extraction-result";
 import { StatusBadge } from "@/components/documents/status-badge";
 
 export const dynamic = "force-dynamic";
@@ -21,11 +21,11 @@ export default async function DocumentResultPage({
   return (
     <div className="space-y-6">
       <Link
-        href={`/cases/${caseId}`}
+        href={`/cases/${caseId}/extraction`}
         className="text-muted-foreground hover:text-foreground inline-flex items-center gap-1 text-sm"
       >
         <ArrowLeft className="size-4" />
-        Back to case
+        Back to extraction
       </Link>
 
       <div className="flex items-center justify-between gap-4">
