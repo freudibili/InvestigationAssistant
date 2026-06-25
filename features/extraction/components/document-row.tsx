@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import {
   CheckCircle2,
@@ -8,12 +9,22 @@ import {
   Loader2,
   Sparkles,
   StopCircle,
+  Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { StatusBadge } from "@/components/documents/status-badge";
 import { getSupportedExtension } from "@/lib/documents";
+import { useDeleteDocument } from "@/features/documents/hooks/use-documents";
 import {
   useCancelExtraction,
   useDocumentProgress,
@@ -24,6 +35,8 @@ import type { CaseDocument } from "@/lib/types";
 export function DocumentRow({ document }: { document: CaseDocument }) {
   const extract = useExtractDocument(document.caseId);
   const cancelExtraction = useCancelExtraction(document.caseId);
+  const remove = useDeleteDocument(document.caseId);
+  const [confirmOpen, setConfirmOpen] = useState(false);
   const progressQuery = useDocumentProgress(
     document.caseId,
     document.id,
@@ -70,6 +83,18 @@ export function DocumentRow({ document }: { document: CaseDocument }) {
         error instanceof Error
           ? error.message
           : "Could not cancel extraction."
+      );
+    }
+  }
+
+  async function handleDelete() {
+    try {
+      await remove.mutateAsync(document.id);
+      setConfirmOpen(false);
+      toast.success("Document deleted.");
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Could not delete document."
       );
     }
   }
@@ -144,6 +169,17 @@ export function DocumentRow({ document }: { document: CaseDocument }) {
                   : "Extract Interview Data"}
             </Button>
           )}
+
+          <Button
+            size="icon"
+            variant="ghost"
+            className="text-muted-foreground hover:text-destructive"
+            onClick={() => setConfirmOpen(true)}
+            disabled={isExtracting || isStartingExtraction || remove.isPending}
+            aria-label="Delete document"
+          >
+            <Trash2 />
+          </Button>
         </div>
       </div>
 
@@ -187,6 +223,33 @@ export function DocumentRow({ document }: { document: CaseDocument }) {
           </ol>
         </div>
       ) : null}
+
+      <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete document</DialogTitle>
+            <DialogDescription>
+              {`"${document.fileName}" and its extracted data will be permanently deleted. This cannot be undone.`}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setConfirmOpen(false)}
+              disabled={remove.isPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={handleDelete}
+              disabled={remove.isPending}
+            >
+              {remove.isPending ? "Deleting…" : "Delete"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

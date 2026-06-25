@@ -91,7 +91,7 @@ cp .env.example .env.local
 | `SUPABASE_SERVICE_ROLE_KEY` | Supabase → Project Settings → API (server-only secret) |
 | `SUPABASE_STORAGE_BUCKET` | defaults to `case-documents` |
 | `OPENAI_API_KEY` | OpenAI dashboard |
-| `OPENAI_MODEL` | defaults to `gpt-4o-mini` |
+| `OPENAI_MODEL` | defaults to `gpt-5.5` |
 
 ### 3. Set up the database
 

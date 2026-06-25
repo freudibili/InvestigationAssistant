@@ -978,7 +978,6 @@ function chunkArray<T>(items: T[], size: number): T[][] {
 async function requestExtraction(prompt: string): Promise<ExtractionResponse> {
   const completion = await getClient().chat.completions.create({
     model: env.openaiModel,
-    temperature: 0,
     response_format: { type: "json_object" },
     messages: [
       { role: "system", content: SYSTEM_PROMPT },

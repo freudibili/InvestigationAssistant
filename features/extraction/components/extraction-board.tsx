@@ -7,8 +7,8 @@ export function ExtractionBoard({ documents }: { documents: CaseDocument[] }) {
   if (documents.length === 0) {
     return (
       <p className="text-muted-foreground rounded-lg border border-dashed p-6 text-center text-sm">
-        No documents to extract yet. Upload interview transcripts in the
-        Documents tab to get started.
+        No documents to extract yet. Upload interview transcripts above to get
+        started.
       </p>
     );
   }

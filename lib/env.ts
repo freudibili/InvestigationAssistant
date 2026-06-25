@@ -38,7 +38,7 @@ export const env = {
     return required("OPENAI_API_KEY", process.env.OPENAI_API_KEY);
   },
   storageBucket: process.env.SUPABASE_STORAGE_BUCKET ?? "case-documents",
-  openaiModel: process.env.OPENAI_MODEL ?? "gpt-4o-mini",
+  openaiModel: process.env.OPENAI_MODEL ?? "gpt-5.5",
 };
 
 export function getDatabaseEnvironmentIssues(): string[] {

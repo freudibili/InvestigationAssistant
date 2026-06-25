@@ -12,9 +12,9 @@ import type { Case, CaseDocument } from "@/lib/types";
 
 /**
  * Shared chrome for every case sub-page: a live header (case type, title,
- * delete) plus the Documents / Extraction / Investigation Analysis tab bar.
- * Rendered once in the case layout so the three tabs stay independent route
- * subtrees while sharing one header.
+ * delete) plus the Extraction / Investigation Analysis tab bar. Rendered once
+ * in the case layout so the tabs stay independent route subtrees while sharing
+ * one header.
  */
 export function CaseChrome({
   caseId,
@@ -35,7 +35,6 @@ export function CaseChrome({
   const pathname = usePathname();
 
   const tabs = [
-    { href: `/cases/${caseId}`, label: "Documents", exact: true },
     { href: `/cases/${caseId}/extraction`, label: "Extraction" },
     { href: `/cases/${caseId}/analysis`, label: "Investigation Analysis" },
   ];

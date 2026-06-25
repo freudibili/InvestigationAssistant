@@ -1,27 +1,12 @@
-import { notFound } from "next/navigation";
-
-import { getCase } from "@/lib/db/cases";
-import { listDocumentsForCase } from "@/lib/db/documents";
-import { DocumentsPanel } from "@/features/documents/components/documents-panel";
+import { redirect } from "next/navigation";
 
 export const dynamic = "force-dynamic";
 
-export default async function CaseDocumentsPage({
+export default async function CasePage({
   params,
 }: {
   params: Promise<{ caseId: string }>;
 }) {
   const { caseId } = await params;
-  const investigationCase = await getCase(caseId);
-  if (!investigationCase) notFound();
-
-  const documents = await listDocumentsForCase(caseId);
-
-  return (
-    <DocumentsPanel
-      caseId={caseId}
-      initialCase={investigationCase}
-      initialDocuments={documents}
-    />
-  );
+  redirect(`/cases/${caseId}/extraction`);
 }

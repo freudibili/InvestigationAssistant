@@ -20,6 +20,7 @@ export interface EventEntry {
   date: string | null;
   description: string;
   participants: string[];
+  sourcePages: string[];
 }
 
 /** Compact projection of one interview handed to the LLM. */
@@ -171,6 +172,7 @@ export function buildAggregate(documents: CaseDocument[]): AggregateResult {
         date: event.date ?? null,
         description: event.description,
         participants: event.participants ?? [],
+        sourcePages: event.sourcePages ?? [],
       };
       eventEntries.push(entry);
       aiEvents.push({ id: eventId, date: entry.date, description: entry.description });
@@ -229,7 +231,7 @@ export function buildAggregate(documents: CaseDocument[]): AggregateResult {
         date: event.date ?? null,
         description: event.description,
       })),
-      witnesses: docWitnesses.map((w) => w.display ?? w.name),
+      witnesses: docWitnesses.map((w) => w.name),
       people: data.peopleMentioned ?? [],
     });
   });
@@ -307,15 +309,7 @@ function buildTimeline(
     if (!event.description.trim()) continue;
     const key = `${event.date ?? ""}|${normalizeText(event.description)}`;
     const document = docById.get(event.interviewId);
-    const ref = document
-      ? sourceRefFor(
-          document,
-          // We only have the event id here; rebuild the page from the source
-          // event via the document's extraction is unnecessary — events carry
-          // sourcePages, but we already mapped them in EventEntry-less form.
-          undefined
-        )
-      : null;
+    const ref = document ? sourceRefFor(document, event.sourcePages) : null;
 
     const existing = merged.get(key);
     if (existing) {
