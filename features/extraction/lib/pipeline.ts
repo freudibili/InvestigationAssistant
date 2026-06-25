@@ -1,8 +1,6 @@
 import "server-only";
 
-import OpenAI from "openai";
 import { ZodError } from "zod";
-import { env } from "@/lib/env";
 import { extractionResponseSchema } from "@/lib/validation";
 import { CASE_TYPES } from "@/lib/types";
 import type { ExtractionResponse } from "@/lib/validation";
@@ -10,13 +8,7 @@ import {
   splitChunkIntoSinglePages,
   type ExtractionChunk,
 } from "@/features/extraction/lib/extraction-chunks";
-
-let client: OpenAI | null = null;
-
-function getClient() {
-  if (!client) client = new OpenAI({ apiKey: env.openaiApiKey });
-  return client;
-}
+import { getExtractionProvider } from "@/features/extraction/lib/providers";
 
 /**
  * A failure produced while turning a model response into validated extraction
@@ -976,29 +968,23 @@ function chunkArray<T>(items: T[], size: number): T[][] {
 }
 
 async function requestExtraction(prompt: string): Promise<ExtractionResponse> {
-  const completion = await getClient().chat.completions.create({
-    model: env.openaiModel,
-    response_format: { type: "json_object" },
-    messages: [
-      { role: "system", content: SYSTEM_PROMPT },
-      { role: "user", content: prompt },
-    ],
+  const { content, truncated } = await getExtractionProvider().complete({
+    system: SYSTEM_PROMPT,
+    user: prompt,
   });
 
-  const choice = completion.choices[0];
-  const content = choice?.message?.content;
   if (!content) {
     throw new ExtractionError("The AI returned an empty response.", {
       recoverable: true,
     });
   }
 
-  // A `length` finish reason means the model hit its output token ceiling and
-  // the JSON is almost certainly cut off mid-structure.
-  if (choice.finish_reason === "length") {
+  // The model hit its output token ceiling, so the JSON is almost certainly cut
+  // off mid-structure. Recoverable: the caller retries over smaller units.
+  if (truncated) {
     throw new ExtractionError(
       "The AI response was cut off before it finished. Try again.",
-      { recoverable: true, detail: `finish_reason=length, chars=${content.length}` }
+      { recoverable: true, detail: `truncated=true, chars=${content.length}` }
     );
   }
 

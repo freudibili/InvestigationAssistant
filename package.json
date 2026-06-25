@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.106.0",
     "@radix-ui/react-dialog": "^1.1.17",
     "@radix-ui/react-label": "^2.1.10",
     "@radix-ui/react-select": "^2.3.1",

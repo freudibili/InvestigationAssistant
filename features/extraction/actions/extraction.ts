@@ -13,7 +13,7 @@ import {
   ExtractionError,
   extractInterviewChunkWithFallback,
   parseStoredDrafts,
-} from "@/features/extraction/lib/openai";
+} from "@/features/extraction/lib/pipeline";
 import { suggestCaseType } from "@/lib/db/cases";
 import {
   cancelDocumentExtraction,

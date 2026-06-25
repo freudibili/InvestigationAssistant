@@ -37,8 +37,22 @@ export const env = {
   get openaiApiKey() {
     return required("OPENAI_API_KEY", process.env.OPENAI_API_KEY);
   },
+  get anthropicApiKey() {
+    return required("ANTHROPIC_API_KEY", process.env.ANTHROPIC_API_KEY);
+  },
   storageBucket: process.env.SUPABASE_STORAGE_BUCKET ?? "case-documents",
   openaiModel: process.env.OPENAI_MODEL ?? "gpt-5.5",
+  anthropicModel: process.env.ANTHROPIC_MODEL ?? "claude-sonnet-4-6",
+  // Sonnet 4.6 caps output at 64K; a generous default avoids spurious
+  // truncation on dense pages or large consolidation batches.
+  anthropicMaxTokens: Number(process.env.ANTHROPIC_MAX_TOKENS ?? 32000),
+  // Read as a getter (not a captured constant) so a benchmark can switch
+  // providers mid-process by reassigning process.env.EXTRACTION_PROVIDER.
+  get extractionProvider(): "openai" | "anthropic" {
+    return process.env.EXTRACTION_PROVIDER === "anthropic"
+      ? "anthropic"
+      : "openai";
+  },
 };
 
 export function getDatabaseEnvironmentIssues(): string[] {
