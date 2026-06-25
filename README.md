@@ -14,6 +14,10 @@ Create case → Upload interview PDFs → (manually) Extract → Review structur
 ```
 
 - PDF text is extracted **on upload** and stored as `rawText`.
+- Investigator-facing source references use real PDF page numbers only.
+- DOC, DOCX, and TXT uploads can be processed internally, but their extracted
+  evidence shows pagination unavailable until the source is converted to a
+  paginated PDF.
 - AI extraction runs **only when the investigator clicks “Extract Interview Data”.**
 - Running AI extraction can be canceled from the document row; canceled documents
   can be retried.

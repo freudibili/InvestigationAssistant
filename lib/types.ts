@@ -1,5 +1,8 @@
 import type { z } from "zod";
-import type { extractedDataSchema } from "@/lib/validation";
+import type {
+  extractedDataSchema,
+  extractionResponseSchema,
+} from "@/lib/validation";
 
 export const CASE_TYPES = [
   "mobbing",
@@ -38,6 +41,20 @@ export type DocumentStatus = (typeof DOCUMENT_STATUSES)[number];
 /** Structured data returned by the AI extraction step. */
 export type ExtractedData = z.infer<typeof extractedDataSchema>;
 
+/** The full per-call AI response (extracted data plus a suggested case type). */
+export type ExtractionResponse = z.infer<typeof extractionResponseSchema>;
+
+/**
+ * The drafts produced from a single extraction chunk, persisted mid-run so a
+ * failed or canceled extraction can resume without re-extracting that chunk.
+ * `chunkLabel` is the chunk's stable label (e.g. "Pages 1-3"); one chunk yields
+ * several drafts when a dense group is retried page-by-page.
+ */
+export interface ExtractionDraftGroup {
+  chunkLabel: string;
+  drafts: ExtractionResponse[];
+}
+
 export interface Case {
   id: string;
   title: string;
@@ -58,6 +75,12 @@ export interface CaseDocument {
   extractionCurrentStep: number;
   extractionTotalSteps: number;
   extractionStep: string | null;
+  /**
+   * Whether a previous (failed or canceled) run left page drafts that the next
+   * extraction can resume from. The drafts themselves stay server-side; only
+   * this flag is sent to the client so the UI can offer "Resume" over "Retry".
+   */
+  hasResumableDrafts: boolean;
   createdAt: string;
   extractedAt: string | null;
 }

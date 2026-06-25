@@ -1,3 +1,5 @@
+"use client";
+
 import {
   Card,
   CardContent,
@@ -6,10 +8,17 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
   AlertTriangle,
   BadgeCheck,
   CircleHelp,
   ClipboardList,
+  ExternalLink,
   Eye,
   FileQuestion,
   Gavel,
@@ -21,6 +30,8 @@ import {
   Users,
 } from "lucide-react";
 import type * as React from "react";
+import { createContext, useContext, useState } from "react";
+import { getExtension, getSupportedExtension } from "@/lib/documents";
 import type { CaseDocument, ExtractedData } from "@/lib/types";
 
 type EvidenceItem = ExtractedData["factualStatements"][number];
@@ -29,13 +40,93 @@ type WitnessItem = ExtractedData["potentialWitnesses"][number];
 type ConsolidatedWitnessItem = ExtractedData["consolidatedWitnesses"][number];
 type DisplayQuote = QuoteItem | string;
 type SourceContext = {
+  documentId: string;
   documentName: string;
-  originalDocumentUrl: string | null;
+  /**
+   * Whether the stored source is a paginated PDF (native or converted). Drives
+   * the empty-state wording: an uncited item on a paginated document is just
+   * "no source page", not "pagination unavailable".
+   */
+  paginationAvailable: boolean;
 };
 type PageReference = {
   label: string;
-  pageStart: number | null;
+  pageStart: number;
 };
+
+type SourceViewerTarget = {
+  documentId: string;
+  documentName: string;
+  label: string;
+  pageStart: number;
+};
+
+const SourceViewerContext = createContext<
+  ((target: SourceViewerTarget) => void) | null
+>(null);
+
+function sourceHref(documentId: string, pageStart: number) {
+  return `/api/documents/${documentId}/source?page=${pageStart}`;
+}
+
+/**
+ * The name to show for the cited source. When the stored object is a paginated
+ * PDF but the upload was a non-PDF (converted at extraction time), display the
+ * `.pdf` name we actually link to instead of the original `.docx`/`.txt` name.
+ */
+function sourceDisplayName(fileName: string, isPdfSource: boolean): string {
+  const ext = getExtension(fileName);
+  if (!isPdfSource || ext === ".pdf") return fileName;
+  const base = ext ? fileName.slice(0, -ext.length) : fileName;
+  return `${base}.pdf`;
+}
+
+/**
+ * Renders the source PDF inside a modal, jumped to the cited page. The API
+ * route 302-redirects to a signed URL ending in `#page=N`, which the browser's
+ * PDF viewer honors inside the iframe.
+ */
+function SourceViewerDialog({
+  target,
+  onClose,
+}: {
+  target: SourceViewerTarget | null;
+  onClose: () => void;
+}) {
+  return (
+    <Dialog open={target !== null} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="flex h-[88vh] max-w-[min(96vw,72rem)] flex-col gap-3 p-4 sm:max-w-[min(96vw,72rem)]">
+        {target ? (
+          <>
+            <DialogHeader className="pr-8">
+              <DialogTitle className="flex flex-wrap items-center gap-2 text-base">
+                <span className="truncate">{target.documentName}</span>
+                <span className="text-muted-foreground font-normal">
+                  · {target.label}
+                </span>
+                <a
+                  href={sourceHref(target.documentId, target.pageStart)}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-muted-foreground hover:text-foreground inline-flex items-center gap-1 text-xs font-normal"
+                >
+                  <ExternalLink className="size-3.5" />
+                  Open in new tab
+                </a>
+              </DialogTitle>
+            </DialogHeader>
+            <iframe
+              key={`${target.documentId}-${target.pageStart}`}
+              src={sourceHref(target.documentId, target.pageStart)}
+              title={`${target.documentName} · ${target.label}`}
+              className="min-h-0 w-full flex-1 rounded-md border"
+            />
+          </>
+        ) : null}
+      </DialogContent>
+    </Dialog>
+  );
+}
 
 function Field({ label, value }: { label: string; value: string | null }) {
   return (
@@ -65,40 +156,56 @@ function SourcePages({
     .map(parsePageReference)
     .filter((page): page is PageReference => Boolean(page));
   if (pageReferences.length === 0) {
-    return <Badge variant="outline">No source page</Badge>;
+    return (
+      <Badge
+        variant="outline"
+        className="max-w-full whitespace-normal text-left leading-snug"
+      >
+        Source: {source.documentName} ·{" "}
+        {source.paginationAvailable ? "No source page" : "Pagination unavailable"}
+      </Badge>
+    );
   }
 
   return (
     <span className="inline-flex flex-wrap gap-1.5">
-      {pageReferences.map((page) => {
-        const badge = (
-          <Badge
-            variant="outline"
-            className="max-w-full whitespace-normal text-left leading-snug"
-          >
-            Source: {source.documentName} · {page.label}
-          </Badge>
-        );
-        const href =
-          source.originalDocumentUrl && page.pageStart
-            ? `${source.originalDocumentUrl}#page=${page.pageStart}`
-            : source.originalDocumentUrl;
-
-        return href ? (
-          <a
-            key={page.label}
-            href={href}
-            target="_blank"
-            rel="noreferrer"
-            title={`Open ${source.documentName} at ${page.label}`}
-          >
-            {badge}
-          </a>
-        ) : (
-          <span key={page.label}>{badge}</span>
-        );
-      })}
+      {pageReferences.map((page) => (
+        <SourcePageBadge key={page.label} page={page} source={source} />
+      ))}
     </span>
+  );
+}
+
+function SourcePageBadge({
+  page,
+  source,
+}: {
+  page: PageReference;
+  source: SourceContext;
+}) {
+  const openViewer = useContext(SourceViewerContext);
+
+  return (
+    <button
+      type="button"
+      onClick={() =>
+        openViewer?.({
+          documentId: source.documentId,
+          documentName: source.documentName,
+          label: page.label,
+          pageStart: page.pageStart,
+        })
+      }
+      title={`Open ${source.documentName} at ${page.label}`}
+      className="focus-visible:ring-ring rounded-md focus:outline-none focus-visible:ring-2"
+    >
+      <Badge
+        variant="outline"
+        className="max-w-full cursor-pointer whitespace-normal text-left leading-snug hover:bg-accent"
+      >
+        Source: {source.documentName} · {page.label}
+      </Badge>
+    </button>
   );
 }
 
@@ -106,7 +213,14 @@ function parsePageReference(
   value: string | null | undefined
 ): PageReference | null {
   const normalized = value?.replace(/\s+/g, " ").trim();
-  if (!normalized || /^chunks?\b/i.test(normalized)) return null;
+  if (
+    !normalized ||
+    /^chunks?\b/i.test(normalized) ||
+    /^internal segments?\b/i.test(normalized) ||
+    /pagination unavailable|source location unavailable/i.test(normalized)
+  ) {
+    return null;
+  }
 
   const pageMatch = normalized.match(
     /\bpages?\s+(\d+)(?:\s*[-–]\s*(\d+))?\b/i
@@ -128,10 +242,7 @@ function parsePageReference(
     };
   }
 
-  return {
-    label: normalized,
-    pageStart: null,
-  };
+  return null;
 }
 
 function EmptyState({ children }: { children: string }) {
@@ -288,16 +399,24 @@ function SectionCard({
 
 export function ExtractionResult({
   document,
-  originalDocumentUrl,
 }: {
   document: CaseDocument;
-  originalDocumentUrl?: string | null;
 }) {
   const data = document.extractedData;
+  // The stored object is a paginated PDF when it's a native PDF or has been
+  // converted at extraction time; `fileUrl` (not `fileName`) reflects that.
+  const isPdfSource = getSupportedExtension(document.fileUrl) === ".pdf";
   const source: SourceContext = {
-    documentName: document.fileName,
-    originalDocumentUrl: originalDocumentUrl ?? null,
+    documentId: document.id,
+    // A non-PDF upload is converted to a paginated PDF at extraction time and
+    // the source link/viewer serves that PDF. The original `fileName` keeps its
+    // `.docx`/`.txt` extension, so surface the `.pdf` name we actually open.
+    documentName: sourceDisplayName(document.fileName, isPdfSource),
+    paginationAvailable: isPdfSource,
   };
+  const [viewerTarget, setViewerTarget] = useState<SourceViewerTarget | null>(
+    null
+  );
 
   if (!data) {
     return (
@@ -334,7 +453,12 @@ export function ExtractionResult({
   const position = data.interviewPosition;
 
   return (
-    <div className="space-y-6">
+    <SourceViewerContext.Provider value={setViewerTarget}>
+      <SourceViewerDialog
+        target={viewerTarget}
+        onClose={() => setViewerTarget(null)}
+      />
+      <div className="space-y-6">
       {extractionWarnings.length > 0 ? (
         <SectionCard
           title="Extraction Warnings"
@@ -872,6 +996,7 @@ export function ExtractionResult({
           </CardContent>
         </details>
       </Card>
-    </div>
+      </div>
+    </SourceViewerContext.Provider>
   );
 }

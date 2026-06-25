@@ -7,7 +7,12 @@ import {
   CONTENT_TYPE_BY_EXTENSION,
   getSupportedExtension,
 } from "@/lib/documents";
-import type { CaseDocument, DocumentStatus, ExtractedData } from "@/lib/types";
+import type {
+  CaseDocument,
+  DocumentStatus,
+  ExtractedData,
+  ExtractionDraftGroup,
+} from "@/lib/types";
 
 export async function listDocumentsForCase(
   caseId: string
@@ -78,6 +83,59 @@ export async function createDocumentFromUpload(params: {
   }
 
   return mapDocument(data);
+}
+
+/**
+ * Replace a document's stored source with a converted PDF. Used when a non-PDF
+ * upload is turned into a paginated PDF at extraction time: the new PDF is
+ * uploaded, the row points at it with page-markered `raw_text`, and the old
+ * object is removed (best-effort). Returns the new storage object path.
+ */
+export async function replaceDocumentWithPdf(params: {
+  id: string;
+  runId: string;
+  caseId: string;
+  oldObjectPath: string;
+  pdfBytes: Uint8Array;
+  rawText: string;
+}): Promise<string> {
+  const supabase = getSupabaseAdmin();
+  const objectPath = `${params.caseId}/${crypto.randomUUID()}.pdf`;
+
+  const { error: uploadError } = await supabase.storage
+    .from(env.storageBucket)
+    .upload(objectPath, params.pdfBytes, {
+      contentType: CONTENT_TYPE_BY_EXTENSION[".pdf"],
+      upsert: false,
+    });
+
+  if (uploadError) throw new Error(uploadError.message);
+
+  // Guard on the live run, like every other write in the extraction flow: a
+  // canceled or superseded run must not overwrite the stored source.
+  const { data, error } = await supabase
+    .from("documents")
+    .update({ file_url: objectPath, raw_text: params.rawText })
+    .eq("id", params.id)
+    .eq("status", "extracting")
+    .eq("extraction_run_id", params.runId)
+    .select("id")
+    .maybeSingle();
+
+  if (error || !data) {
+    // Roll back the just-uploaded object so we don't orphan it in storage.
+    await supabase.storage.from(env.storageBucket).remove([objectPath]);
+    throw new Error(error?.message ?? "Extraction is no longer active.");
+  }
+
+  // Best-effort cleanup of the original (non-PDF) object.
+  if (params.oldObjectPath && params.oldObjectPath !== objectPath) {
+    await supabase.storage
+      .from(env.storageBucket)
+      .remove([params.oldObjectPath]);
+  }
+
+  return objectPath;
 }
 
 export async function setDocumentStatus(
@@ -162,6 +220,47 @@ export async function getDocumentExtractionRunState(
   };
 }
 
+/**
+ * Load the page drafts persisted by a previous extraction run so a failed or
+ * canceled extraction can resume without re-extracting completed chunks.
+ * Returns an empty array when nothing was saved (a fresh document).
+ */
+export async function getDocumentExtractionDrafts(
+  id: string
+): Promise<ExtractionDraftGroup[]> {
+  const supabase = getSupabaseAdmin();
+  const { data, error } = await supabase
+    .from("documents")
+    .select("extraction_drafts")
+    .eq("id", id)
+    .maybeSingle();
+
+  if (error) throw new Error(error.message);
+  return Array.isArray(data?.extraction_drafts) ? data.extraction_drafts : [];
+}
+
+/**
+ * Persist the page drafts produced so far in the active run. Written after each
+ * batch so that if the run later fails or is canceled, the next extraction can
+ * pick up from the last saved chunk. Guarded on the live run like every other
+ * extraction write, so a canceled or superseded run can't clobber the drafts.
+ */
+export async function saveExtractionDrafts(
+  id: string,
+  runId: string,
+  drafts: ExtractionDraftGroup[]
+): Promise<void> {
+  const supabase = getSupabaseAdmin();
+  const { error } = await supabase
+    .from("documents")
+    .update({ extraction_drafts: drafts })
+    .eq("id", id)
+    .eq("status", "extracting")
+    .eq("extraction_run_id", runId);
+
+  if (error) throw new Error(error.message);
+}
+
 export async function setExtractionProgress(params: {
   id: string;
   runId: string;
@@ -208,6 +307,9 @@ export async function saveExtractionResult(
       extraction_total_steps: progress.totalSteps,
       extraction_step: progress.step,
       extraction_run_id: runId,
+      // Drop the resumable drafts: the document is fully extracted, so a future
+      // re-extraction should start fresh rather than reuse stale page drafts.
+      extraction_drafts: null,
       extracted_at: new Date().toISOString(),
     })
     .eq("id", id)

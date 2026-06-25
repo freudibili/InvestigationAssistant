@@ -17,10 +17,19 @@ const nullableMetadataString = z.preprocess((value) => {
 
 const sourcePagesSchema = z.array(z.string()).default([]);
 
-const evidenceItemSchema = z.object({
-  description: z.string(),
-  sourcePages: sourcePagesSchema,
-});
+// The model is asked for `{ description, sourcePages }` objects, but for some
+// fields (notably findingReadiness.*) it occasionally emits a bare string —
+// likely because evidenceAssessment reuses the same field names as plain
+// `string[]`. Coerce a lone string into an evidence item so one shape slip
+// doesn't fail the entire document extraction. Downstream normalization trims
+// and drops empty descriptions.
+const evidenceItemSchema = z.preprocess(
+  (value) => (typeof value === "string" ? { description: value } : value),
+  z.object({
+    description: z.string(),
+    sourcePages: sourcePagesSchema,
+  })
+);
 
 const identityItemSchema = z.object({
   canonicalName: z.string(),
@@ -171,7 +180,7 @@ export const extractedDataSchema = z.object({
   role: nullableMetadataString,
   interviewerNames: z.array(z.string()).default([]),
   extractionWarnings: z.array(z.string()).default([]),
-  summary: z.string(),
+  summary: z.string().default(""),
   investigationScope: investigationScopeSchema.default({
     primaryClaimants: [],
     primaryAccused: [],
@@ -183,10 +192,10 @@ export const extractedDataSchema = z.object({
   allegations: z
     .array(allegationItemSchema)
     .default([]),
-  peopleMentioned: z.array(z.string()),
+  peopleMentioned: z.array(z.string()).default([]),
   canonicalIdentities: z.array(identityItemSchema).default([]),
-  keyEvents: z.array(eventItemSchema),
-  notableQuotes: z.array(quoteItemSchema),
+  keyEvents: z.array(eventItemSchema).default([]),
+  notableQuotes: z.array(quoteItemSchema).default([]),
   factualStatements: z.array(evidenceItemSchema).default([]),
   opinions: z.array(evidenceItemSchema).default([]),
   assumptions: z.array(evidenceItemSchema).default([]),

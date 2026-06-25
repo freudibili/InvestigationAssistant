@@ -27,6 +27,8 @@ export function mapDocument(row: DocumentRow): CaseDocument {
     extractionCurrentStep: row.extraction_current_step,
     extractionTotalSteps: row.extraction_total_steps,
     extractionStep: row.extraction_step,
+    hasResumableDrafts:
+      Array.isArray(row.extraction_drafts) && row.extraction_drafts.length > 0,
     createdAt: row.created_at,
     extractedAt: row.extracted_at,
   };

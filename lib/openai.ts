@@ -1,11 +1,15 @@
 import "server-only";
 
 import OpenAI from "openai";
+import { ZodError } from "zod";
 import { env } from "@/lib/env";
 import { extractionResponseSchema } from "@/lib/validation";
 import { CASE_TYPES } from "@/lib/types";
 import type { ExtractionResponse } from "@/lib/validation";
-import type { ExtractionChunk } from "@/lib/extraction-chunks";
+import {
+  splitChunkIntoSinglePages,
+  type ExtractionChunk,
+} from "@/lib/extraction-chunks";
 
 let client: OpenAI | null = null;
 
@@ -14,11 +18,40 @@ function getClient() {
   return client;
 }
 
+/**
+ * A failure produced while turning a model response into validated extraction
+ * data. `userMessage` is safe to surface to investigators; `detail`/`cause`
+ * carry the real JSON/Zod diagnostics for server-side logging only.
+ * `recoverable` marks failures (truncation, malformed/incomplete JSON) that a
+ * smaller consolidation batch might fix on retry.
+ */
+export class ExtractionError extends Error {
+  readonly userMessage: string;
+  readonly recoverable: boolean;
+  readonly detail?: string;
+
+  constructor(
+    userMessage: string,
+    options: { recoverable?: boolean; detail?: string; cause?: unknown } = {}
+  ) {
+    super(userMessage, options.cause ? { cause: options.cause } : undefined);
+    this.name = "ExtractionError";
+    this.userMessage = userMessage;
+    this.recoverable = options.recoverable ?? false;
+    this.detail = options.detail;
+  }
+}
+
+function isRecoverableExtractionError(error: unknown): boolean {
+  return error instanceof ExtractionError && error.recoverable;
+}
+
 const SYSTEM_PROMPT = `You are an investigation analysis assistant for workplace investigators.
 Your job is not to summarize interviews. Your job is to extract traceable investigative material that helps investigators build findings, assess allegations, test evidence, identify contradictions, plan follow-up questions, and prepare conclusions.
 Use only information explicitly present in the transcript. Clearly separate facts, allegations, opinions, assumptions, hearsay, observations, evidence, and contradictions.
 Never infer guilt, never draw legal conclusions, and never invent facts.
-Every allegation, event, finding, quote, witness reference, assessment, and action recommendation must include sourcePages back to the original document page labels provided by the user.
+Every allegation, event, finding, quote, witness reference, assessment, and action recommendation must include sourcePages back to the original document page labels provided by the user when real source pagination is available.
+If real source pagination is unavailable, leave sourcePages empty and add an extraction warning that source pagination is unavailable for this document.
 Never expose, cite, or mention internal processing chunks. Investigators work with documents and pages only.
 If a field is not present, return null for metadata or an empty array for lists.
 Names attached to recording/transcription metadata, meeting ownership, or a speaker asking consent/context questions are not interviewee names.
@@ -26,14 +59,14 @@ Return ONLY valid JSON matching the requested schema — no markdown, no comment
 
 const CASE_TYPE_LIST = CASE_TYPES.join('", "');
 
-const USER_PROMPT = `Analyze this workplace investigation interview transcript page.
+const USER_PROMPT = `Analyze this workplace investigation interview transcript source unit.
 
 Optimize for investigation, evidence analysis, traceability, and report preparation. Do not optimize for summarization.
 
 For the provided source label, extract:
 
 1. Interview metadata: interviewee name, interview date, interviewee role, and interviewer names.
-2. Extraction warnings: uncertainty, unreliable speaker labels, ambiguous interviewee identity, missing answer attribution, poor source quality, or places where a page is too thin to assess.
+2. Extraction warnings: uncertainty, unreliable speaker labels, ambiguous interviewee identity, missing answer attribution, poor source quality, unavailable pagination, or places where a source unit is too thin to assess.
 3. Investigation scope: primary claimant(s), primary accused person(s), the actual issue under investigation, primary allegations, and secondary observations.
 4. Allegations: claims, accusations, complaints, or alleged misconduct. For each, identify who is making the allegation, who is the subject, what exactly is alleged, whether it is primary or secondary, supporting evidence, contradictory evidence, missing evidence, relevant quotes, witnesses, follow-up questions, risk areas, and sourcePages.
 5. Factual statements: concrete claims of fact, dates, procedural steps, actions taken, communications, decisions, or things the interviewee says occurred. Do not mix these with opinions.
@@ -49,18 +82,20 @@ For the provided source label, extract:
 15. Relevant events: dated or sequenceable happenings, procedural steps, meetings, reports, decisions, or incidents.
 16. People mentioned and canonical identities: deduplicated canonical people only, with likely transcription variants merged.
 17. Finding readiness: what findings can be supported, what remains unproven, and what evidence still needs collection.
-18. A short investigation-focused summary of this page.
+18. A short investigation-focused summary of this source unit.
 19. Suggested case type, chosen from "${CASE_TYPE_LIST}", only if clearly supported.
 
 Rules:
-- Every item must include sourcePages with the exact page label provided in the transcript header, such as "Page 4" or "Pages 17-18".
-- Do not use chunk labels. If internal chunking is mentioned or implied, convert the reference to the page label from the transcript header.
+- If the transcript header names a single "Source page", every item must include sourcePages with that exact page label, such as "Page 4".
+- If the transcript header lists "Source pages" for a range, the body is split by "--- Page N ---" markers; set each item's sourcePages to the specific page label(s) where it appears, such as "Page 5", never the whole range or a marker line.
+- If the transcript header says "Source pagination: unavailable", sourcePages must be [] for every item and extractionWarnings must include that original page references are unavailable.
+- Do not use internal segment or chunk labels as sourcePages. Internal processing labels are not source locations.
 - Keep allegations separate from facts and events. An allegation is a claim to be tested; it is not a proven fact.
 - Do not classify opinions, interpretations, assumptions, hearsay, or direct observations as allegations unless they also assert specific alleged misconduct or a complaint to be investigated.
 - Example: "Philippe has difficulty accepting Caroline as his superior" is an opinion or interpretation attributed to the speaker. It is not an allegation unless the transcript connects it to specific alleged misconduct.
 - Clearly distinguish direct observations from hearsay, opinions, assumptions, and factual statements.
 - Use null rather than guessing a date, claimant, subject, role, speaker, or metadata value.
-- Supporting evidence and contradictory evidence must be tied to what appears on this source page.
+- Supporting evidence and contradictory evidence must be tied to what appears in this source unit. Use a page citation only when real pagination is available.
 - Missing information, follow-up questions, recommended next interviews, and risk areas should almost always contain items. Return an empty array only when the transcript genuinely leaves no reasonable investigation gap, question, interview, or risk.
 - If evidence is not tied to a specific allegation on this page, still include it in the page-level supportingEvidence or contradictoryEvidence arrays.
 
@@ -230,8 +265,8 @@ You will receive JSON extraction drafts from separate document pages. Consolidat
   conflicting interviewee evidence.
 - Preserve or add extractionWarnings when quote or answer attribution remains
   uncertain after consolidation.
-- Preserve all sourcePages. When merging items, combine their sourcePages.
-- Never expose, preserve, or create chunk references. If a draft contains a chunk reference, replace it with the nearest available page reference or omit the source reference and add an extraction warning.
+- Preserve all real sourcePages. When merging items, combine their sourcePages.
+- Never expose, preserve, or create chunk or internal segment references. If a draft contains a chunk or internal segment reference, omit the source reference and add an extraction warning.
 - Identify the primary claimant(s), primary accused person(s), and actual
   investigation scope from the combined drafts.
 - Separate allegations from facts, opinions, assumptions, hearsay, observations,
@@ -256,7 +291,7 @@ You will receive JSON extraction drafts from separate document pages. Consolidat
   remains unproven, and what evidence still needs collection.
 - Add an Interview Position section by setting interviewPosition.classification to exactly one of: "Supports claimant", "Supports accused", "Mixed / nuanced", "Neutral witness", or "Unknown". Explain why and cite sourcePages.
 - Add evidenceAssessment for every major allegation with strength of supporting evidence, strength of contradictory evidence, confidence level, missing information, recommended next investigative actions, and sourcePages.
-- Preserve pageFindings from the page drafts. If true page references are unavailable, use the best available page label and warn that exact source pagination could not be verified.
+- Preserve pageFindings from page drafts only when true page references are available. If true page references are unavailable, do not invent pageFindings and warn that exact source pagination could not be verified.
 - Return null for suggestedCaseType unless the combined drafts clearly support one of: "${CASE_TYPE_LIST}".
 - Return ONLY valid JSON matching the schema below.
 
@@ -380,12 +415,340 @@ export async function extractInterviewChunk(
   chunk: ExtractionChunk,
   documentName: string
 ): Promise<ExtractionResponse> {
-  return requestExtraction(
+  const response = await requestExtraction(
     USER_PROMPT.replace(
       "{{TRANSCRIPT}}",
-      `Document: ${documentName}\nSource page: ${chunk.label}\n\n${chunk.text}`
+      `Document: ${documentName}\n${chunkProvenanceHeader(chunk)}\n\n${chunk.text}`
     )
   );
+  // The model reliably labels the per-page `pageFindings` bucket but routinely
+  // leaves every item's `sourcePages` array empty. We know exactly which page(s)
+  // this chunk came from, so stamp that provenance deterministically rather than
+  // trusting the model to repeat it on each item.
+  return stampChunkProvenance(response, chunk);
+}
+
+/**
+ * Extract a chunk, falling back to per-page extraction if a grouped call
+ * truncates or returns malformed JSON. A 3-page group is normally fine, but a
+ * dense group can produce a response too large to fit; rather than fail the
+ * whole document, we retry each page on its own. Returns one draft per
+ * successful unit (one for a single-page chunk, several when we fell back).
+ */
+export async function extractInterviewChunkWithFallback(
+  chunk: ExtractionChunk,
+  documentName: string
+): Promise<ExtractionResponse[]> {
+  try {
+    return [await extractInterviewChunk(chunk, documentName)];
+  } catch (error) {
+    const singlePages = splitChunkIntoSinglePages(chunk);
+    if (!isRecoverableExtractionError(error) || singlePages.length < 2) {
+      throw error;
+    }
+
+    return Promise.all(
+      singlePages.map((page) => extractInterviewChunk(page, documentName))
+    );
+  }
+}
+
+/**
+ * Provenance instructions prepended to a chunk so the model cites the right
+ * source location. A multi-page chunk keeps per-page "--- Page N ---" markers
+ * in its body, so we tell the model to cite the specific page each item came
+ * from rather than the whole range.
+ */
+function chunkProvenanceHeader(chunk: ExtractionChunk): string {
+  const isMultiPage =
+    chunk.pageStart != null &&
+    chunk.pageEnd != null &&
+    chunk.pageEnd > chunk.pageStart;
+
+  if (isMultiPage) {
+    return [
+      `Source pages: ${chunk.label}`,
+      'This source unit spans multiple document pages, each delimited by a "--- Page N ---" marker.',
+      'Set every item\'s sourcePages to the specific page label(s) where that information appears (for example "Page 5"), never the whole range or a marker line.',
+    ].join("\n");
+  }
+
+  return `Source page: ${chunk.label}`;
+}
+
+/**
+ * Deterministic page provenance. The model fills the scalar
+ * `pageFindings[].sourcePage` reliably but leaves item `sourcePages` arrays
+ * empty, and the consolidation pass drops arrays altogether. So we attach page
+ * provenance ourselves: every chunk maps to a known page range, and the per-page
+ * `pageFindings` buckets tell us the exact page of each item. A `text -> pages`
+ * index built from the drafts then survives consolidation.
+ */
+type PageIndex = Map<string, Set<string>>;
+
+/** The individual page labels ("Page 4", "Page 5") a chunk spans. */
+function pageLabelsForChunk(chunk: ExtractionChunk): string[] {
+  if (chunk.pageStart == null) return [];
+  const end = chunk.pageEnd ?? chunk.pageStart;
+  const labels: string[] = [];
+  for (let page = chunk.pageStart; page <= end; page += 1) {
+    labels.push(`Page ${page}`);
+  }
+  return labels;
+}
+
+function addToPageIndex(
+  index: PageIndex,
+  text: string | null | undefined,
+  page: string
+): void {
+  const key = normalizeForComparison(text ?? "");
+  if (!key || !page) return;
+  let pages = index.get(key);
+  if (!pages) {
+    pages = new Set();
+    index.set(key, pages);
+  }
+  pages.add(page);
+}
+
+/**
+ * Index a single draft's items by text -> page using its `pageFindings` buckets,
+ * whose `sourcePage` scalar the model fills reliably. This is the exact per-item
+ * page mapping within a chunk.
+ */
+function buildDraftPageIndex(draft: ExtractionResponse): PageIndex {
+  const index: PageIndex = new Map();
+
+  for (const finding of draft.pageFindings) {
+    const page = normalizeSourcePage(finding.sourcePage);
+    if (!page) continue;
+
+    const evidence = [
+      ...finding.allegations.map((item) => item.allegation || item.description),
+      ...finding.factualStatements.map((item) => item.description),
+      ...finding.opinions.map((item) => item.description),
+      ...finding.assumptions.map((item) => item.description),
+      ...finding.hearsay.map((item) => item.description),
+      ...finding.observations.map((item) => item.description),
+      ...finding.supportingEvidence.map((item) => item.description),
+      ...finding.contradictoryEvidence.map((item) => item.description),
+      ...finding.relevantEvents.map((item) => item.description),
+      ...finding.notableQuotes.map((item) => item.text),
+      ...finding.potentialWitnesses.map((item) => item.name),
+    ];
+
+    for (const text of evidence) addToPageIndex(index, text, page);
+  }
+
+  return index;
+}
+
+/**
+ * Index every draft by text -> page(s), drawing on both the page-stamped item
+ * arrays and the per-page `pageFindings` buckets. Used to backfill the
+ * consolidated result.
+ */
+function buildPageIndex(drafts: ExtractionResponse[]): PageIndex {
+  const index: PageIndex = new Map();
+
+  for (const draft of drafts) {
+    // Harvest the pages already on each item (drafts are stamped at extraction).
+    applySourcePages(draft, (text, current) => {
+      for (const page of current) addToPageIndex(index, text, page);
+      return current;
+    });
+
+    // Fold in the per-page bucket mapping as a fallback for any unstamped item.
+    for (const [key, pages] of buildDraftPageIndex(draft)) {
+      let merged = index.get(key);
+      if (!merged) {
+        merged = new Set();
+        index.set(key, merged);
+      }
+      for (const page of pages) merged.add(page);
+    }
+  }
+
+  return index;
+}
+
+function lookupPages(index: PageIndex, text: string | null | undefined): string[] {
+  const key = normalizeForComparison(text ?? "");
+  if (!key) return [];
+  const pages = index.get(key);
+  if (!pages) return [];
+  return [...pages].sort(comparePageLabels);
+}
+
+function comparePageLabels(left: string, right: string): number {
+  const leftNumber = Number(left.match(/\d+/)?.[0] ?? 0);
+  const rightNumber = Number(right.match(/\d+/)?.[0] ?? 0);
+  return leftNumber - rightNumber;
+}
+
+/**
+ * Fill in each item's `sourcePages` from the chunk's pages: prefer the exact
+ * page from the draft's `pageFindings`, otherwise fall back to the chunk's whole
+ * page span. Items the model already cited are left untouched.
+ */
+function stampChunkProvenance(
+  response: ExtractionResponse,
+  chunk: ExtractionChunk
+): ExtractionResponse {
+  const fallback = pageLabelsForChunk(chunk);
+  // No real pagination (legacy/unpaginated source): leave sourcePages empty.
+  if (fallback.length === 0) return response;
+
+  const index = buildDraftPageIndex(response);
+  return applySourcePages(response, (text, current) => {
+    if (current.length > 0) return current;
+    const matched = lookupPages(index, text);
+    return matched.length > 0 ? matched : fallback;
+  });
+}
+
+/**
+ * Restore page citations dropped during consolidation by matching each
+ * uncited item back to the drafts' `text -> pages` index. Items consolidation
+ * reworded past recognition simply stay uncited rather than get a wrong page.
+ */
+function backfillSourcePages(
+  response: ExtractionResponse,
+  index: PageIndex
+): ExtractionResponse {
+  return applySourcePages(response, (text, current) =>
+    current.length > 0 ? current : lookupPages(index, text)
+  );
+}
+
+/**
+ * Walk every `sourcePages`-bearing item in an extraction response, replacing
+ * each with `resolve(textKey, currentPages)`. Centralizes the schema traversal
+ * so stamping, backfilling, and indexing all share one definition of "every
+ * item that carries a source page".
+ */
+type PageResolver = (text: string, current: string[]) => string[];
+
+function applySourcePages(
+  response: ExtractionResponse,
+  resolve: PageResolver
+): ExtractionResponse {
+  type Evidence = { description: string; sourcePages: string[] };
+  type Quote = { text: string; sourcePages: string[] };
+  type Witness = { name: string; sourcePages: string[] };
+  type Event = { description: string; sourcePages: string[] };
+
+  const evidence = <T extends Evidence>(items: T[]): T[] =>
+    items.map((item) => ({
+      ...item,
+      sourcePages: resolve(item.description, item.sourcePages),
+    }));
+  const quotes = <T extends Quote>(items: T[]): T[] =>
+    items.map((item) => ({
+      ...item,
+      sourcePages: resolve(item.text, item.sourcePages),
+    }));
+  const witnesses = <T extends Witness>(items: T[]): T[] =>
+    items.map((item) => ({
+      ...item,
+      sourcePages: resolve(item.name, item.sourcePages),
+    }));
+  const events = <T extends Event>(items: T[]): T[] =>
+    items.map((item) => ({
+      ...item,
+      sourcePages: resolve(item.description, item.sourcePages),
+    }));
+  const allegations = <T extends AllegationItem>(items: T[]): T[] =>
+    items.map((item) => ({
+      ...item,
+      supportingEvidence: evidence(item.supportingEvidence),
+      contradictoryEvidence: evidence(item.contradictoryEvidence),
+      relevantQuotes: quotes(item.relevantQuotes),
+      witnesses: witnesses(item.witnesses),
+      sourcePages: resolve(item.allegation || item.description, item.sourcePages),
+    }));
+
+  return {
+    ...response,
+    investigationScope: {
+      ...response.investigationScope,
+      sourcePages: resolve(
+        response.investigationScope.scopeSummary,
+        response.investigationScope.sourcePages
+      ),
+    },
+    allegations: allegations(response.allegations),
+    canonicalIdentities: response.canonicalIdentities.map((item) => ({
+      ...item,
+      sourcePages: resolve(item.canonicalName, item.sourcePages),
+    })),
+    keyEvents: events(response.keyEvents),
+    notableQuotes: quotes(response.notableQuotes),
+    factualStatements: evidence(response.factualStatements),
+    opinions: evidence(response.opinions),
+    assumptions: evidence(response.assumptions),
+    hearsay: evidence(response.hearsay),
+    observations: evidence(response.observations),
+    potentialWitnesses: witnesses(response.potentialWitnesses),
+    consolidatedWitnesses: response.consolidatedWitnesses.map((item) => ({
+      ...item,
+      sourcePages: resolve(item.name, item.sourcePages),
+    })),
+    missingInformation: evidence(response.missingInformation),
+    followUpQuestions: evidence(response.followUpQuestions),
+    recommendedNextInterviews: evidence(response.recommendedNextInterviews),
+    riskAreas: evidence(response.riskAreas),
+    findingReadiness: {
+      supportableFindings: evidence(response.findingReadiness.supportableFindings),
+      unprovenFindings: evidence(response.findingReadiness.unprovenFindings),
+      evidenceToCollect: evidence(response.findingReadiness.evidenceToCollect),
+    },
+    interviewPosition: {
+      ...response.interviewPosition,
+      sourcePages: resolve(
+        response.interviewPosition.rationale,
+        response.interviewPosition.sourcePages
+      ),
+    },
+    evidenceAssessment: response.evidenceAssessment.map((item) => ({
+      ...item,
+      sourcePages: resolve(item.allegation, item.sourcePages),
+    })),
+    pageFindings: response.pageFindings.map((finding) => ({
+      ...finding,
+      allegations: allegations(finding.allegations),
+      factualStatements: evidence(finding.factualStatements),
+      opinions: evidence(finding.opinions),
+      assumptions: evidence(finding.assumptions),
+      hearsay: evidence(finding.hearsay),
+      observations: evidence(finding.observations),
+      notableQuotes: quotes(finding.notableQuotes),
+      supportingEvidence: evidence(finding.supportingEvidence),
+      contradictoryEvidence: evidence(finding.contradictoryEvidence),
+      potentialWitnesses: witnesses(finding.potentialWitnesses),
+      relevantEvents: events(finding.relevantEvents),
+    })),
+  };
+}
+
+/**
+ * Re-validate the drafts persisted from an earlier run before reusing them on
+ * resume. Stored drafts come back from the database as plain JSON, and the
+ * extraction schema may have changed since they were written. If any draft in
+ * the group fails validation we return null so the caller re-extracts that
+ * chunk from scratch rather than feeding stale data into consolidation.
+ */
+export function parseStoredDrafts(drafts: unknown[]): ExtractionResponse[] | null {
+  const parsed: ExtractionResponse[] = [];
+
+  for (const draft of drafts) {
+    const result = extractionResponseSchema.safeParse(draft);
+    if (!result.success) return null;
+    parsed.push(result.data);
+  }
+
+  return parsed;
 }
 
 export async function verifyInterviewExtraction(
@@ -394,6 +757,106 @@ export async function verifyInterviewExtraction(
   return requestExtraction(
     VERIFICATION_PROMPT.replace("{{DRAFTS}}", JSON.stringify(extractions))
   );
+}
+
+/**
+ * How many page drafts (or batch summaries) are consolidated in a single model
+ * call. Kept small so we never ask the model to emit one huge JSON object from
+ * the entire document at once — the failure mode that truncates responses.
+ */
+const CONSOLIDATION_BATCH_SIZE = 5;
+
+export interface ConsolidationOptions {
+  /**
+   * Reports human-readable consolidation progress. Callers also use this to
+   * check for cancellation between batches by throwing from the callback.
+   */
+  onStep?: (message: string) => Promise<void> | void;
+}
+
+/**
+ * Consolidate per-page extraction drafts into one final result without ever
+ * sending the whole document to the model in a single prompt.
+ *
+ * Page drafts stay the source of truth. Drafts are merged in batches of
+ * {@link CONSOLIDATION_BATCH_SIZE}; the resulting batch summaries are then
+ * merged again, recursively, until a single result remains. Each call only ever
+ * sees a handful of items, so the consolidation prompt stays small regardless
+ * of document size. Source page references are preserved by the verification
+ * prompt and `normalizeExtractionResponse` at every level.
+ */
+export async function consolidateExtractions(
+  drafts: ExtractionResponse[],
+  options: ConsolidationOptions = {}
+): Promise<ExtractionResponse> {
+  if (drafts.length === 0) {
+    throw new ExtractionError(
+      "No page extractions were produced, so there is nothing to consolidate."
+    );
+  }
+
+  // Build the page index from the (already page-stamped) drafts BEFORE
+  // consolidation, then backfill afterwards: the consolidation model frequently
+  // drops `sourcePages` arrays entirely, so we restore each item's page(s) from
+  // the drafts rather than depending on the model to carry them through.
+  const pageIndex = buildPageIndex(drafts);
+  const consolidated = await reduceDrafts(drafts, options);
+  return backfillSourcePages(consolidated, pageIndex);
+}
+
+async function reduceDrafts(
+  drafts: ExtractionResponse[],
+  options: ConsolidationOptions
+): Promise<ExtractionResponse> {
+  // Small enough to merge in a single pass.
+  if (drafts.length <= CONSOLIDATION_BATCH_SIZE) {
+    return mergeBatch(drafts, options);
+  }
+
+  // Otherwise consolidate batch-by-batch, then merge the batch summaries.
+  const batches = chunkArray(drafts, CONSOLIDATION_BATCH_SIZE);
+  const summaries: ExtractionResponse[] = [];
+
+  for (const [index, batch] of batches.entries()) {
+    await options.onStep?.(
+      `Consolidating batch ${index + 1} of ${batches.length}`
+    );
+    summaries.push(await mergeBatch(batch, options));
+  }
+
+  await options.onStep?.(`Merging ${summaries.length} batch summaries`);
+  return reduceDrafts(summaries, options);
+}
+
+/**
+ * Merge a single small batch. If the model truncates or returns malformed JSON
+ * we retry once over smaller halves, which keeps each prompt even shorter.
+ */
+async function mergeBatch(
+  drafts: ExtractionResponse[],
+  options: ConsolidationOptions
+): Promise<ExtractionResponse> {
+  try {
+    return await verifyInterviewExtraction(drafts);
+  } catch (error) {
+    if (!isRecoverableExtractionError(error) || drafts.length < 2) {
+      throw error;
+    }
+
+    await options.onStep?.("Retrying consolidation with smaller batches");
+    const mid = Math.ceil(drafts.length / 2);
+    const firstHalf = await mergeBatch(drafts.slice(0, mid), options);
+    const secondHalf = await mergeBatch(drafts.slice(mid), options);
+    return verifyInterviewExtraction([firstHalf, secondHalf]);
+  }
+}
+
+function chunkArray<T>(items: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+  return chunks;
 }
 
 async function requestExtraction(prompt: string): Promise<ExtractionResponse> {
@@ -407,19 +870,78 @@ async function requestExtraction(prompt: string): Promise<ExtractionResponse> {
     ],
   });
 
-  const content = completion.choices[0]?.message?.content;
+  const choice = completion.choices[0];
+  const content = choice?.message?.content;
   if (!content) {
-    throw new Error("The model returned an empty response.");
+    throw new ExtractionError("The AI returned an empty response.", {
+      recoverable: true,
+    });
+  }
+
+  // A `length` finish reason means the model hit its output token ceiling and
+  // the JSON is almost certainly cut off mid-structure.
+  if (choice.finish_reason === "length") {
+    throw new ExtractionError(
+      "The AI response was cut off before it finished. Try again.",
+      { recoverable: true, detail: `finish_reason=length, chars=${content.length}` }
+    );
   }
 
   let parsed: unknown;
   try {
     parsed = JSON.parse(content);
-  } catch {
-    throw new Error("The model did not return valid JSON.");
+  } catch (error) {
+    throw new ExtractionError(
+      "The AI returned a response that was not valid JSON (it may have been truncated).",
+      { recoverable: true, cause: error, detail: content.slice(0, 1000) }
+    );
   }
 
-  return normalizeExtractionResponse(extractionResponseSchema.parse(parsed));
+  let validated: ExtractionResponse;
+  try {
+    validated = extractionResponseSchema.parse(parsed);
+  } catch (error) {
+    const fields = summarizeZodFields(error);
+    throw new ExtractionError(
+      fields
+        ? `The AI response was missing or had the wrong type for: ${fields}.`
+        : "The AI response did not match the expected format.",
+      {
+        recoverable: true,
+        cause: error,
+        detail: error instanceof Error ? error.message : String(error),
+      }
+    );
+  }
+
+  return normalizeExtractionResponse(validated);
+}
+
+/**
+ * Turn a ZodError into a short, human-readable list of the dotted field paths
+ * that failed (e.g. "summary, allegations[0].description"), so a validation
+ * failure tells the investigator *which* fields were wrong rather than just
+ * "did not match the expected format". Returns null for non-Zod errors.
+ */
+function summarizeZodFields(error: unknown): string | null {
+  if (!(error instanceof ZodError) || error.issues.length === 0) return null;
+
+  const paths = new Set<string>();
+  for (const issue of error.issues) {
+    const path = issue.path
+      .map((segment) =>
+        typeof segment === "number"
+          ? `[${segment}]`
+          : `.${String(segment)}`
+      )
+      .join("")
+      .replace(/^\./, "");
+    paths.add(path || "(root)");
+  }
+
+  const fields = [...paths];
+  const shown = fields.slice(0, 5).join(", ");
+  return fields.length > 5 ? `${shown} (+${fields.length - 5} more)` : shown;
 }
 
 function normalizeExtractionResponse(
@@ -733,6 +1255,10 @@ function normalizeSourcePages(sourcePages: string[]): string[] {
 function normalizeSourcePage(sourcePage: string): string {
   const normalized = sourcePage.replace(/\s+/g, " ").trim();
   if (/^chunks?\b/i.test(normalized)) return "";
+  if (/^internal segments?\b/i.test(normalized)) return "";
+  if (/pagination unavailable|source location unavailable/i.test(normalized)) {
+    return "";
+  }
 
   const pageRange = normalized.match(/^pages?\s+(\d+)(?:\s*[-–]\s*(\d+))?$/i);
   if (!pageRange) return normalized;

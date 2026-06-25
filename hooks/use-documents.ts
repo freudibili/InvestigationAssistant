@@ -64,9 +64,30 @@ export function useDeleteDocument(caseId: string) {
 export function useExtractDocument(caseId: string) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (documentId: string) => extractDocumentAction(documentId),
+    mutationFn: async (documentId: string) => {
+      // The action returns failures instead of throwing (so the real message
+      // survives in production). Re-throw on the client, where react-query's
+      // error handling and the caller's try/catch expect a rejection.
+      const result = await extractDocumentAction(documentId);
+      if (!result.ok) {
+        const error = new Error(result.message);
+        if (result.canceled) error.name = "ExtractionCanceledError";
+        throw error;
+      }
+      return result.document;
+    },
     onMutate: async (documentId) => {
       await queryClient.cancelQueries({ queryKey: queryKeys.case(caseId) });
+      await queryClient.cancelQueries({
+        queryKey: queryKeys.document(documentId),
+      });
+
+      const optimisticProgress = {
+        status: "extracting" as const,
+        extractionCurrentStep: 0,
+        extractionTotalSteps: 0,
+        extractionStep: "Preparing document",
+      };
 
       queryClient.setQueryData<CaseResponse>(
         queryKeys.case(caseId),
@@ -77,17 +98,21 @@ export function useExtractDocument(caseId: string) {
             ...current,
             documents: current.documents.map((document) =>
               document.id === documentId
-                ? {
-                    ...document,
-                    status: "extracting",
-                    extractionCurrentStep: 0,
-                    extractionTotalSteps: 0,
-                    extractionStep: "Preparing document",
-                  }
+                ? { ...document, ...optimisticProgress }
                 : document
             ),
           };
         }
+      );
+
+      // The progress UI reads `useDocumentProgress` (the per-document cache)
+      // first, so without this a re-extraction would show the previous run's
+      // stale terminal status until the first poll lands. Mark it extracting
+      // now so the steps appear the instant the button is pressed.
+      queryClient.setQueryData<CaseDocument>(
+        queryKeys.document(documentId),
+        (current) =>
+          current ? { ...current, ...optimisticProgress } : current
       );
     },
     onSuccess: (document) => {
@@ -197,7 +222,16 @@ export function useDocumentProgress(
       return document;
     },
     enabled,
-    refetchInterval: (query) =>
-      query.state.data?.status === "extracting" ? 1000 : false,
+    // Poll until the run reaches a terminal state. We can't key solely on
+    // "extracting": the first poll often lands before the server has flipped the
+    // status from "uploaded", and returning false there kills polling for good —
+    // so the live steps never appear until a manual refresh.
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      if (status === "extracted" || status === "failed" || status === "canceled") {
+        return false;
+      }
+      return 1000;
+    },
   });
 }

@@ -3,6 +3,7 @@ import type {
   CaseTypeSource,
   DocumentStatus,
   ExtractedData,
+  ExtractionDraftGroup,
 } from "@/lib/types";
 
 /**
@@ -45,6 +46,7 @@ export type Database = {
           extraction_total_steps: number;
           extraction_step: string | null;
           extraction_run_id: string | null;
+          extraction_drafts: ExtractionDraftGroup[] | null;
           created_at: string;
           extracted_at: string | null;
         };
@@ -60,6 +62,7 @@ export type Database = {
           extraction_total_steps?: number;
           extraction_step?: string | null;
           extraction_run_id?: string | null;
+          extraction_drafts?: ExtractionDraftGroup[] | null;
           created_at?: string;
           extracted_at?: string | null;
         };

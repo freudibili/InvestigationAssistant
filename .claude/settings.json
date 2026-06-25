@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(yarn typecheck *)",
+      "Bash(yarn lint *)",
+      "Bash(npx next *)",
+      "Bash(yarn build *)",
+      "Bash(npx eslint *)",
+      "Skill(code-review)",
+      "Skill(code-review:*)",
+      "Bash(node ./_t.mjs)",
+      "Bash(git --no-pager diff HEAD --stat)",
+      "Bash(git --no-pager diff HEAD -- lib/openai.ts lib/validation.ts lib/db/documents.ts app/actions/documents.ts hooks/use-documents.ts)",
+      "Bash(git --no-pager diff HEAD -- components/documents/document-row.tsx components/documents/extraction-result.tsx app/cases/'[caseId]'/documents/'[documentId]'/page.tsx README.md package.json)",
+      "Bash(npx --no-install tsx -e ' *)",
+      "Bash(ps -o pid,etime,command -p 26770)",
+      "Bash(ps -p 27683 -o command=)",
+      "Bash(sed -i '' 's/const MAX_CHUNK_CHARS = 12000;/const MAX_CHUNK_CHARS = 20000;/' grouptest.mjs)",
+      "Bash(node grouptest.mjs)",
+      "Bash(node /private/tmp/claude-501/-Users-fredericwatare-Documents-Development-InvestigationAssistant/b57d5084-0a2b-4aaf-b385-658ff05ff5a1/scratchpad/t.mjs)"
+    ]
+  }
+}

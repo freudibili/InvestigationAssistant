@@ -23,6 +23,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { StatusBadge } from "@/components/documents/status-badge";
+import { getSupportedExtension } from "@/lib/documents";
 import {
   useCancelExtraction,
   useDeleteDocument,
@@ -131,7 +132,7 @@ export function DocumentRow({ document }: { document: CaseDocument }) {
                 Re-extract
               </Button>
             </>
-          ) : isExtracting ? (
+          ) : isExtracting || isStartingExtraction ? (
             <Button
               size="sm"
               variant="outline"
@@ -157,10 +158,14 @@ export function DocumentRow({ document }: { document: CaseDocument }) {
                 <Sparkles />
               )}
               {isStartingExtraction
-                ? "Extracting..."
+                ? liveDocument.hasResumableDrafts
+                  ? "Resuming..."
+                  : "Extracting..."
                 : liveDocument.status === "failed" ||
                     liveDocument.status === "canceled"
-                  ? "Retry Extraction"
+                  ? liveDocument.hasResumableDrafts
+                    ? "Resume Extraction"
+                    : "Retry Extraction"
                   : "Extract Interview Data"}
             </Button>
           )}
@@ -262,6 +267,13 @@ function StepIcon({ status }: { status: StepStatus }) {
   return <Circle className="text-muted-foreground size-3.5 shrink-0" />;
 }
 
+/**
+ * How many pages each checklist step covers. Mirrors the server's
+ * `PAGES_PER_CHUNK` so each step maps to a single extraction call and the
+ * checklist ticks off in the same page groups the document is extracted in.
+ */
+const DISPLAY_PAGES_PER_GROUP = 2;
+
 function getExtractionSteps(
   document: CaseDocument,
   isExtracting: boolean
@@ -270,33 +282,75 @@ function getExtractionSteps(
   const currentStep = document.extractionCurrentStep;
   const currentMessage = document.extractionStep ?? "";
 
+  const isConverting = /^Converting\b/i.test(currentMessage);
+  const isPreparing = /^(Prepared\b|Preparing)/i.test(currentMessage);
+  const isVerifying =
+    /^(Verifying|Consolidating|Merging|Retrying)\b/i.test(currentMessage);
+  const isExtractingSourceUnit = /^Extracting\b/i.test(currentMessage);
+  // Non-PDF uploads are converted to a paginated PDF first; surface that as the
+  // leading step. The original file name keeps its extension after conversion,
+  // so it reliably tells us whether this document needed converting.
+  const requiresConversion = getSupportedExtension(document.fileName) !== ".pdf";
+
+  // Before the page count is known (conversion + preparation report
+  // `totalSteps: 0`), show a skeleton so the step list — and the active
+  // "Convert to PDF" step — stay visible instead of collapsing to one line.
   if (totalSteps <= 0) {
-    return [{ label: "Prepare document", status: "active" }];
+    const skeleton: { label: string; status: StepStatus }[] = [];
+    if (requiresConversion) {
+      skeleton.push({
+        label: "Convert to PDF",
+        status: isConverting ? "active" : "complete",
+      });
+    }
+    skeleton.push({
+      label: "Prepare pages",
+      status: isConverting ? "pending" : "active",
+    });
+    skeleton.push({ label: "Verify result", status: "pending" });
+    return skeleton;
   }
 
-  const pageCount = Math.max(totalSteps - 1, 0);
-  const isPreparing = /^(Prepared\b|Preparing)/i.test(currentMessage);
-  const isVerifying = /^Verifying\b/i.test(currentMessage);
-  const isExtractingPage = /^Extracting\b/i.test(currentMessage);
-  const steps: { label: string; status: StepStatus }[] = [
-    {
-      label: "Prepare pages",
-      status: isPreparing ? "active" : "complete",
-    },
-  ];
+  // Progress is reported in pages: `totalSteps` is the page count plus one final
+  // verify step, and `currentStep` is the number of pages completed so far.
+  const totalPages = Math.max(totalSteps - 1, 0);
+  const steps: { label: string; status: StepStatus }[] = [];
 
-  for (let index = 0; index < pageCount; index += 1) {
-    const pageNumber = index + 1;
+  if (requiresConversion) {
+    steps.push({
+      label: "Convert to PDF",
+      status: isConverting ? "active" : "complete",
+    });
+  }
+
+  steps.push({
+    label: "Prepare pages",
+    status: isConverting ? "pending" : isPreparing ? "active" : "complete",
+  });
+
+  // Show real page ranges grouped the same few-pages-at-a-time the extractor
+  // uses, so progress visibly jumps a group at a time ("Extract pages 4–6")
+  // instead of crawling page by page. A group completes once all its pages are
+  // done; the frontier group is active while extracting.
+  for (
+    let firstPage = 1;
+    firstPage <= totalPages;
+    firstPage += DISPLAY_PAGES_PER_GROUP
+  ) {
+    const lastPage = Math.min(firstPage + DISPLAY_PAGES_PER_GROUP - 1, totalPages);
     let status: StepStatus = "pending";
 
-    if (currentStep >= pageNumber) {
+    if (currentStep >= lastPage) {
       status = "complete";
-    } else if (isExtractingPage && currentStep === index) {
+    } else if (isExtractingSourceUnit && currentStep >= firstPage - 1) {
       status = "active";
     }
 
     steps.push({
-      label: `Extract page ${pageNumber}`,
+      label:
+        firstPage === lastPage
+          ? `Extract page ${firstPage}`
+          : `Extract pages ${firstPage}–${lastPage}`,
       status,
     });
   }
@@ -306,7 +360,7 @@ function getExtractionSteps(
     status:
       currentStep >= totalSteps
         ? "complete"
-        : isVerifying || (!isExtracting && currentStep >= pageCount)
+        : isVerifying || (!isExtracting && currentStep >= totalPages)
           ? "active"
           : "pending",
   });
