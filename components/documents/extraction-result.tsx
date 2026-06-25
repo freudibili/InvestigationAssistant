@@ -15,17 +15,13 @@ import {
 } from "@/components/ui/dialog";
 import {
   AlertTriangle,
-  BadgeCheck,
+  CalendarClock,
   CircleHelp,
-  ClipboardList,
   ExternalLink,
-  Eye,
-  FileQuestion,
-  Gavel,
+  FileText,
   ListChecks,
   MessageSquareQuote,
   ShieldAlert,
-  Target,
   UserCheck,
   Users,
 } from "lucide-react";
@@ -34,18 +30,15 @@ import { createContext, useContext, useState } from "react";
 import { getExtension, getSupportedExtension } from "@/lib/documents";
 import type { CaseDocument, ExtractedData } from "@/lib/types";
 
-type EvidenceItem = ExtractedData["factualStatements"][number];
 type QuoteItem = ExtractedData["notableQuotes"][number];
 type WitnessItem = ExtractedData["potentialWitnesses"][number];
-type ConsolidatedWitnessItem = ExtractedData["consolidatedWitnesses"][number];
-type DisplayQuote = QuoteItem | string;
 type SourceContext = {
   documentId: string;
   documentName: string;
   /**
    * Whether the stored source is a paginated PDF (native or converted). Drives
-   * the empty-state wording: an uncited item on a paginated document is just
-   * "no source page", not "pagination unavailable".
+   * the empty-state wording: an uncited item on a paginated document just has no
+   * source page, whereas an unpaginated source can never be cited.
    */
   paginationAvailable: boolean;
 };
@@ -64,6 +57,9 @@ type SourceViewerTarget = {
 const SourceViewerContext = createContext<
   ((target: SourceViewerTarget) => void) | null
 >(null);
+
+/** Collapse a section behind a <details> once it grows past this many items. */
+const COLLAPSE_THRESHOLD = 12;
 
 function sourceHref(documentId: string, pageStart: number) {
   return `/api/documents/${documentId}/source?page=${pageStart}`;
@@ -145,7 +141,13 @@ function Field({ label, value }: { label: string; value: string | null }) {
   );
 }
 
-function SourcePages({
+/**
+ * The source evidence for an extracted item. Every quote (and every traceable
+ * item) carries its own independent page badge — clicking it opens the PDF at
+ * that page. When no reliable page is available we show a compact, non-clickable
+ * "Source unavailable" badge rather than fabricating a page number.
+ */
+function SourceBadges({
   pages,
   source,
 }: {
@@ -155,14 +157,15 @@ function SourcePages({
   const pageReferences = (pages ?? [])
     .map(parsePageReference)
     .filter((page): page is PageReference => Boolean(page));
+
   if (pageReferences.length === 0) {
     return (
       <Badge
         variant="outline"
-        className="max-w-full whitespace-normal text-left leading-snug"
+        className="text-muted-foreground gap-1 text-xs font-normal"
       >
-        Source: {source.documentName} ·{" "}
-        {source.paginationAvailable ? "No source page" : "Pagination unavailable"}
+        <FileText className="size-3" />
+        Source unavailable
       </Badge>
     );
   }
@@ -200,10 +203,11 @@ function SourcePageBadge({
       className="focus-visible:ring-ring rounded-md focus:outline-none focus-visible:ring-2"
     >
       <Badge
-        variant="outline"
-        className="max-w-full cursor-pointer whitespace-normal text-left leading-snug hover:bg-accent"
+        variant="secondary"
+        className="hover:bg-accent cursor-pointer gap-1 text-xs font-normal"
       >
-        Source: {source.documentName} · {page.label}
+        <FileText className="size-3" />
+        {page.label}
       </Badge>
     </button>
   );
@@ -249,123 +253,49 @@ function EmptyState({ children }: { children: string }) {
   return <p className="text-muted-foreground text-sm italic">{children}</p>;
 }
 
-function EvidenceList({
-  items,
-  empty,
+/**
+ * A single quote rendered as evidence: the quoted text plus its own clickable
+ * page badge. The quote is the evidence — the badge is attached to the quote,
+ * never to a generic per-card "Sources" block.
+ */
+function Quote({
+  quote,
   source,
 }: {
-  items: EvidenceItem[];
-  empty: string;
+  quote: QuoteItem;
   source: SourceContext;
 }) {
-  if (items.length === 0) return <EmptyState>{empty}</EmptyState>;
-
   return (
-    <ul className="space-y-2 text-sm">
-      {items.map((item, i) => (
-        <li key={i} className="space-y-1 leading-relaxed">
-          <p>{item.description}</p>
-          <SourcePages pages={item.sourcePages} source={source} />
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-function WitnessList({
-  witnesses,
-  source,
-}: {
-  witnesses: WitnessItem[];
-  source: SourceContext;
-}) {
-  if (witnesses.length === 0) {
-    return <EmptyState>No potential witnesses identified.</EmptyState>;
-  }
-
-  return (
-    <ul className="space-y-2 text-sm">
-      {witnesses.map((witness, i) => (
-        <li key={i} className="space-y-1 leading-relaxed">
-          <p>
-            <span className="font-medium">{witness.name}:</span>{" "}
-            {witness.relevance}
-          </p>
-          <SourcePages pages={witness.sourcePages} source={source} />
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-function ConsolidatedWitnessList({
-  witnesses,
-  source,
-}: {
-  witnesses: ConsolidatedWitnessItem[];
-  source: SourceContext;
-}) {
-  if (witnesses.length === 0) {
-    return <EmptyState>No consolidated witnesses generated.</EmptyState>;
-  }
-
-  return (
-    <div className="space-y-4 text-sm">
-      {witnesses.map((witness, i) => (
-        <div key={i} className="space-y-2 border-b pb-4 last:border-0 last:pb-0">
-          <div className="flex flex-wrap items-start justify-between gap-2">
-            <p className="font-medium leading-relaxed">{witness.name}</p>
-            <Badge variant="secondary">
-              Priority {Math.round(witness.priorityScore)}
-            </Badge>
-          </div>
-          <p className="leading-relaxed">{witness.whyTheyMatter}</p>
-          {(witness.relatedAllegations ?? []).length > 0 ? (
-            <p className="text-muted-foreground leading-relaxed">
-              Allegations: {(witness.relatedAllegations ?? []).join("; ")}
-            </p>
-          ) : null}
-          {(witness.mentionedInInterviews ?? []).length > 0 ? (
-            <p className="text-muted-foreground leading-relaxed">
-              Mentioned in: {(witness.mentionedInInterviews ?? []).join(", ")}
-            </p>
-          ) : null}
-          <SourcePages pages={witness.sourcePages} source={source} />
-        </div>
-      ))}
-    </div>
+    <blockquote className="border-muted-foreground/30 space-y-1.5 border-l-2 pl-3">
+      <p className="text-sm italic leading-relaxed">
+        {quote.speaker ? (
+          <span className="text-muted-foreground not-italic">
+            {quote.speaker}:{" "}
+          </span>
+        ) : null}
+        “{quote.text}”
+      </p>
+      <SourceBadges pages={quote.sourcePages} source={source} />
+    </blockquote>
   );
 }
 
 function QuoteList({
   quotes,
+  empty,
   source,
 }: {
-  quotes: DisplayQuote[];
+  quotes: QuoteItem[];
+  empty: string;
   source: SourceContext;
 }) {
-  if (quotes.length === 0) return <EmptyState>No notable quotes captured.</EmptyState>;
+  if (quotes.length === 0) return <EmptyState>{empty}</EmptyState>;
 
   return (
     <div className="space-y-3">
-      {quotes.map((quote, i) => {
-        const text = typeof quote === "string" ? quote : quote.text;
-        const speaker = typeof quote === "string" ? null : quote.speaker;
-        const sourcePages = typeof quote === "string" ? [] : quote.sourcePages;
-
-        return (
-          <blockquote
-            key={i}
-            className="border-muted-foreground/30 text-muted-foreground space-y-1 border-l-2 pl-3 text-sm italic"
-          >
-            <p>
-              {speaker ? `${speaker}: ` : ""}
-              {text}
-            </p>
-            <SourcePages pages={sourcePages} source={source} />
-          </blockquote>
-        );
-      })}
+      {quotes.map((quote, i) => (
+        <Quote key={i} quote={quote} source={source} />
+      ))}
     </div>
   );
 }
@@ -378,7 +308,7 @@ function SectionCard({
 }: {
   title: string;
   count?: number;
-  icon: typeof ClipboardList;
+  icon: typeof ListChecks;
   children: React.ReactNode;
 }) {
   return (
@@ -393,6 +323,43 @@ function SectionCard({
         </CardTitle>
       </CardHeader>
       <CardContent>{children}</CardContent>
+    </Card>
+  );
+}
+
+/**
+ * A section that collapses behind a disclosure once it grows long, keeping the
+ * page scannable. Open by default while short.
+ */
+function CollapsibleSectionCard({
+  title,
+  count,
+  icon: Icon,
+  collapsed,
+  children,
+}: {
+  title: string;
+  count: number;
+  icon: typeof ListChecks;
+  collapsed: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <Card>
+      <details open={!collapsed}>
+        <summary className="cursor-pointer list-none">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Icon className="size-4" />
+              {title}
+              <span className="text-muted-foreground font-normal">
+                ({count})
+              </span>
+            </CardTitle>
+          </CardHeader>
+        </summary>
+        <CardContent>{children}</CardContent>
+      </details>
     </Card>
   );
 }
@@ -430,27 +397,13 @@ export function ExtractionResult({
 
   const interviewerNames = data.interviewerNames ?? [];
   const extractionWarnings = data.extractionWarnings ?? [];
-  const investigationScope = data.investigationScope;
   const allegations = data.allegations ?? [];
-  const keyEvents = data.keyEvents ?? [];
+  const facts = data.factualStatements ?? [];
   const peopleMentioned = data.peopleMentioned ?? [];
-  const canonicalIdentities = data.canonicalIdentities ?? [];
-  const notableQuotes = (data.notableQuotes ?? []) as DisplayQuote[];
-  const evidenceAssessment = data.evidenceAssessment ?? [];
-  const factualStatements = data.factualStatements ?? [];
-  const opinions = data.opinions ?? [];
-  const assumptions = data.assumptions ?? [];
-  const hearsay = data.hearsay ?? [];
-  const observations = data.observations ?? [];
-  const consolidatedWitnesses = data.consolidatedWitnesses ?? [];
-  const missingInformation = data.missingInformation ?? [];
+  const events = data.keyEvents ?? [];
+  const witnesses = data.potentialWitnesses ?? [];
+  const notableQuotes = data.notableQuotes ?? [];
   const followUpQuestions = data.followUpQuestions ?? [];
-  const recommendedNextInterviews = data.recommendedNextInterviews ?? [];
-  const riskAreas = data.riskAreas ?? [];
-  const findingReadiness = data.findingReadiness;
-  const potentialWitnesses = data.potentialWitnesses ?? [];
-  const pageFindings = data.pageFindings ?? [];
-  const position = data.interviewPosition;
 
   return (
     <SourceViewerContext.Provider value={setViewerTarget}>
@@ -459,543 +412,204 @@ export function ExtractionResult({
         onClose={() => setViewerTarget(null)}
       />
       <div className="space-y-6">
-      {extractionWarnings.length > 0 ? (
-        <SectionCard
-          title="Extraction Warnings"
-          count={extractionWarnings.length}
-          icon={AlertTriangle}
-        >
-          <ul className="list-inside list-disc space-y-1.5 text-sm">
-            {extractionWarnings.map((warning, i) => (
-              <li key={i}>{warning}</li>
-            ))}
-          </ul>
+        {/* 1. Document Information */}
+        <SectionCard title="Document Information" icon={FileText}>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <Field label="File Name" value={source.documentName} />
+            <Field label="Interviewee" value={data.intervieweeName} />
+            <Field
+              label="Interviewer"
+              value={
+                interviewerNames.length > 0 ? interviewerNames.join(", ") : null
+              }
+            />
+            <Field label="Date" value={data.interviewDate} />
+            <Field label="Role" value={data.role} />
+          </div>
+          {extractionWarnings.length > 0 ? (
+            <div className="mt-4 border-t pt-4">
+              <p className="text-muted-foreground mb-2 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide">
+                <AlertTriangle className="size-3.5" />
+                Extraction Warnings ({extractionWarnings.length})
+              </p>
+              <ul className="list-inside list-disc space-y-1 text-sm">
+                {extractionWarnings.map((warning, i) => (
+                  <li key={i}>{warning}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
         </SectionCard>
-      ) : null}
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Metadata</CardTitle>
-        </CardHeader>
-        <CardContent className="grid gap-4 sm:grid-cols-4">
-          <Field label="Interviewee Name" value={data.intervieweeName} />
-          <Field
-            label="Interviewer"
-            value={
-              interviewerNames.length > 0 ? interviewerNames.join(", ") : null
-            }
-          />
-          <Field label="Role" value={data.role} />
-          <Field label="Date" value={data.interviewDate} />
-        </CardContent>
-      </Card>
-
-      <SectionCard title="Investigation Impact" icon={Gavel}>
-        <p className="text-sm leading-relaxed">
-          {data.investigationImpact?.trim() || data.summary?.trim() || (
-            <span className="text-muted-foreground italic">
-              No investigation impact produced.
-            </span>
-          )}
-        </p>
-      </SectionCard>
-
-      <SectionCard title="Investigation Scope" icon={Target}>
-        {investigationScope ? (
-          <div className="space-y-4 text-sm">
-            <div className="grid gap-4 sm:grid-cols-2">
-              <Field
-                label="Primary Claimants"
-                value={
-                  investigationScope.primaryClaimants.length > 0
-                    ? investigationScope.primaryClaimants.join(", ")
-                    : null
-                }
-              />
-              <Field
-                label="Primary Accused"
-                value={
-                  investigationScope.primaryAccused.length > 0
-                    ? investigationScope.primaryAccused.join(", ")
-                    : null
-                }
-              />
-            </div>
-            <p className="leading-relaxed">
-              {investigationScope.scopeSummary || (
-                <span className="text-muted-foreground italic">
-                  No scope summary generated.
-                </span>
-              )}
-            </p>
-            {(investigationScope.primaryAllegations ?? []).length > 0 ? (
-              <div>
-                <p className="mb-1 text-xs font-medium uppercase tracking-wide">
-                  Primary Allegations
-                </p>
-                <ul className="list-inside list-disc space-y-1">
-                  {(investigationScope.primaryAllegations ?? []).map(
-                    (item, index) => (
-                      <li key={index}>{item}</li>
-                    )
-                  )}
-                </ul>
-              </div>
-            ) : null}
-            {(investigationScope.secondaryObservations ?? []).length > 0 ? (
-              <div>
-                <p className="mb-1 text-xs font-medium uppercase tracking-wide">
-                  Secondary Observations
-                </p>
-                <ul className="list-inside list-disc space-y-1">
-                  {(investigationScope.secondaryObservations ?? []).map(
-                    (item, index) => (
-                      <li key={index}>{item}</li>
-                    )
-                  )}
-                </ul>
-              </div>
-            ) : null}
-            <SourcePages pages={investigationScope.sourcePages} source={source} />
-          </div>
-        ) : (
-          <EmptyState>No investigation scope generated.</EmptyState>
-        )}
-      </SectionCard>
-
-      <SectionCard title="Finding Readiness" icon={ListChecks}>
-        {findingReadiness ? (
-          <div className="grid gap-4 lg:grid-cols-3">
-            <div>
-              <p className="mb-2 text-xs font-medium uppercase tracking-wide">
-                Supportable
-              </p>
-              <EvidenceList
-                items={findingReadiness.supportableFindings ?? []}
-                empty="No supportable findings identified."
-                source={source}
-              />
-            </div>
-            <div>
-              <p className="mb-2 text-xs font-medium uppercase tracking-wide">
-                Unproven
-              </p>
-              <EvidenceList
-                items={findingReadiness.unprovenFindings ?? []}
-                empty="No unproven findings identified."
-                source={source}
-              />
-            </div>
-            <div>
-              <p className="mb-2 text-xs font-medium uppercase tracking-wide">
-                Evidence To Collect
-              </p>
-              <EvidenceList
-                items={findingReadiness.evidenceToCollect ?? []}
-                empty="No evidence collection needs identified."
-                source={source}
-              />
-            </div>
-          </div>
-        ) : (
-          <EmptyState>No finding readiness generated.</EmptyState>
-        )}
-      </SectionCard>
-
-      <SectionCard title="Interview Position" icon={BadgeCheck}>
-        {position ? (
-          <div className="space-y-2 text-sm">
-            <Badge variant="secondary">{position.classification}</Badge>
-            <p className="leading-relaxed">{position.rationale}</p>
-            <SourcePages pages={position.sourcePages} source={source} />
-          </div>
-        ) : (
-          <EmptyState>No interview position assessed.</EmptyState>
-        )}
-      </SectionCard>
-
-      <SectionCard title="Allegations" count={allegations.length} icon={ShieldAlert}>
-        {allegations.length > 0 ? (
-          <div className="space-y-5">
-            {allegations.map((allegation, i) => (
-              <div key={i} className="space-y-3 border-b pb-5 last:border-0 last:pb-0">
-                <div className="space-y-1 text-sm">
-                  <p className="font-medium leading-relaxed">
+        {/* 2. Allegations Mentioned */}
+        <SectionCard
+          title="Allegations Mentioned"
+          count={allegations.length}
+          icon={ShieldAlert}
+        >
+          {allegations.length > 0 ? (
+            <div className="space-y-4">
+              {allegations.map((allegation, i) => (
+                <div key={i} className="bg-muted/30 space-y-3 rounded-lg border p-4">
+                  <p className="text-sm font-semibold leading-relaxed">
                     {allegation.allegation || allegation.description}
                   </p>
-                  <p className="text-muted-foreground leading-relaxed">
-                    {allegation.classification === "secondary"
-                      ? "Secondary"
-                      : "Primary"}{" "}
-                    /{" "}
-                    Claimant: {allegation.claimant ?? "Unknown"} / Subject:{" "}
-                    {allegation.subject ?? "Unknown"} / Date:{" "}
-                    {allegation.date ?? "Unknown"}
-                  </p>
-                  <SourcePages pages={allegation.sourcePages} source={source} />
-                </div>
-
-                <div className="grid gap-4 lg:grid-cols-2">
-                  <div>
-                    <p className="mb-2 text-xs font-medium uppercase tracking-wide">
-                      Supporting Evidence
-                    </p>
-                    <EvidenceList
-                      items={allegation.supportingEvidence ?? []}
-                      empty="No supporting evidence extracted."
-                      source={source}
-                    />
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <Field label="Claimant" value={allegation.claimant} />
+                    <Field label="Subject" value={allegation.subject} />
                   </div>
                   <div>
-                    <p className="mb-2 text-xs font-medium uppercase tracking-wide">
-                      Contradictory Evidence
-                    </p>
-                    <EvidenceList
-                      items={allegation.contradictoryEvidence ?? []}
-                      empty="No contradictory evidence extracted."
-                      source={source}
-                    />
-                  </div>
-                </div>
-
-                {(allegation.missingEvidence ?? []).length > 0 ? (
-                  <div className="text-sm">
-                    <p className="mb-1 text-xs font-medium uppercase tracking-wide">
-                      Missing Evidence
-                    </p>
-                    <ul className="list-inside list-disc space-y-1">
-                      {(allegation.missingEvidence ?? []).map((item, index) => (
-                        <li key={index}>{item}</li>
-                      ))}
-                    </ul>
-                  </div>
-                ) : null}
-
-                <div className="grid gap-4 lg:grid-cols-2">
-                  <div>
-                    <p className="mb-2 text-xs font-medium uppercase tracking-wide">
-                      Witnesses
-                    </p>
-                    <WitnessList
-                      witnesses={allegation.witnesses ?? []}
-                      source={source}
-                    />
-                  </div>
-                  <div>
-                    <p className="mb-2 text-xs font-medium uppercase tracking-wide">
-                      Relevant Quotes
+                    <p className="text-muted-foreground mb-2 text-xs font-medium uppercase tracking-wide">
+                      Supporting Quotes
                     </p>
                     <QuoteList
                       quotes={allegation.relevantQuotes ?? []}
+                      empty="No supporting quotes captured for this allegation."
                       source={source}
                     />
                   </div>
                 </div>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <EmptyState>No separate allegations identified.</EmptyState>
-        )}
-      </SectionCard>
-
-      <SectionCard
-        title="Evidence Assessment"
-        count={evidenceAssessment.length}
-        icon={ClipboardList}
-      >
-        {evidenceAssessment.length > 0 ? (
-          <div className="space-y-4 text-sm">
-            {evidenceAssessment.map((assessment, i) => (
-              <div key={i} className="space-y-2 border-b pb-4 last:border-0 last:pb-0">
-                <p className="font-medium">{assessment.allegation}</p>
-                <div className="grid gap-3 sm:grid-cols-3">
-                  <Field
-                    label="Support"
-                    value={assessment.strengthOfSupportingEvidence}
-                  />
-                  <Field
-                    label="Contradiction"
-                    value={assessment.strengthOfContradictoryEvidence}
-                  />
-                  <Field label="Confidence" value={assessment.confidenceLevel} />
-                </div>
-                <SourcePages pages={assessment.sourcePages} source={source} />
-                <div className="grid gap-3 lg:grid-cols-3">
-                  <div>
-                    <p className="mb-1 text-xs font-medium uppercase tracking-wide">
-                      Supportable Findings
-                    </p>
-                    <ul className="list-inside list-disc space-y-1">
-                      {(assessment.supportableFindings ?? []).map(
-                        (item, index) => (
-                          <li key={index}>{item}</li>
-                        )
-                      )}
-                    </ul>
-                  </div>
-                  <div>
-                    <p className="mb-1 text-xs font-medium uppercase tracking-wide">
-                      Unproven Findings
-                    </p>
-                    <ul className="list-inside list-disc space-y-1">
-                      {(assessment.unprovenFindings ?? []).map(
-                        (item, index) => (
-                          <li key={index}>{item}</li>
-                        )
-                      )}
-                    </ul>
-                  </div>
-                  <div>
-                    <p className="mb-1 text-xs font-medium uppercase tracking-wide">
-                      Evidence To Collect
-                    </p>
-                    <ul className="list-inside list-disc space-y-1">
-                      {(assessment.evidenceToCollect ?? []).map(
-                        (item, index) => (
-                          <li key={index}>{item}</li>
-                        )
-                      )}
-                    </ul>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <EmptyState>No evidence assessment produced.</EmptyState>
-        )}
-      </SectionCard>
-
-      <div className="grid gap-6 lg:grid-cols-2">
-        <SectionCard
-          title="Factual Statements"
-          count={factualStatements.length}
-          icon={Eye}
-        >
-          <EvidenceList
-            items={factualStatements}
-            empty="No factual statements extracted."
-            source={source}
-          />
+              ))}
+            </div>
+          ) : (
+            <EmptyState>No allegations mentioned in this document.</EmptyState>
+          )}
         </SectionCard>
 
+        {/* 3. Facts */}
+        <SectionCard title="Facts" count={facts.length} icon={ListChecks}>
+          {facts.length > 0 ? (
+            <ul className="space-y-4 text-sm">
+              {facts.map((fact, i) => (
+                <li key={i} className="space-y-2 leading-relaxed">
+                  <p>{fact.description}</p>
+                  {(fact.supportingQuotes ?? []).length > 0 ? (
+                    <QuoteList
+                      quotes={fact.supportingQuotes}
+                      empty=""
+                      source={source}
+                    />
+                  ) : (
+                    <SourceBadges pages={fact.sourcePages} source={source} />
+                  )}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <EmptyState>No factual statements extracted.</EmptyState>
+          )}
+        </SectionCard>
+
+        {/* 4. People Mentioned */}
+        <CollapsibleSectionCard
+          title="People Mentioned"
+          count={peopleMentioned.length}
+          icon={Users}
+          collapsed={peopleMentioned.length > COLLAPSE_THRESHOLD}
+        >
+          {peopleMentioned.length > 0 ? (
+            <ul className="flex flex-wrap gap-2 text-sm">
+              {peopleMentioned.map((person, i) => (
+                <li key={i}>
+                  <Badge variant="outline" className="font-normal">
+                    {person}
+                  </Badge>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <EmptyState>No people mentioned.</EmptyState>
+          )}
+        </CollapsibleSectionCard>
+
+        {/* 5. Events */}
+        <SectionCard title="Events" count={events.length} icon={CalendarClock}>
+          {events.length > 0 ? (
+            <ul className="space-y-3 text-sm">
+              {events.map((event, i) => (
+                <li key={i} className="space-y-1.5 leading-relaxed">
+                  <p>
+                    <span className="text-muted-foreground font-medium">
+                      {event.date ?? "Undated"}:
+                    </span>{" "}
+                    {event.description}
+                  </p>
+                  {(event.participants ?? []).length > 0 ? (
+                    <p className="text-muted-foreground text-xs">
+                      Participants: {(event.participants ?? []).join(", ")}
+                    </p>
+                  ) : null}
+                  <SourceBadges pages={event.sourcePages} source={source} />
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <EmptyState>No concrete events mentioned.</EmptyState>
+          )}
+        </SectionCard>
+
+        {/* 6. Witnesses Mentioned */}
+        <CollapsibleSectionCard
+          title="Witnesses Mentioned"
+          count={witnesses.length}
+          icon={UserCheck}
+          collapsed={witnesses.length > COLLAPSE_THRESHOLD}
+        >
+          {witnesses.length > 0 ? (
+            <ul className="space-y-4 text-sm">
+              {witnesses.map((witness: WitnessItem, i) => (
+                <li key={i} className="space-y-2 leading-relaxed">
+                  <p>
+                    <span className="font-medium">{witness.name}</span> —{" "}
+                    {witness.relevance}
+                  </p>
+                  {(witness.supportingQuotes ?? []).length > 0 ? (
+                    <QuoteList
+                      quotes={witness.supportingQuotes}
+                      empty=""
+                      source={source}
+                    />
+                  ) : (
+                    <SourceBadges pages={witness.sourcePages} source={source} />
+                  )}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <EmptyState>No potential witnesses mentioned.</EmptyState>
+          )}
+        </CollapsibleSectionCard>
+
+        {/* 7. Relevant Quotes */}
+        <CollapsibleSectionCard
+          title="Relevant Quotes"
+          count={notableQuotes.length}
+          icon={MessageSquareQuote}
+          collapsed={notableQuotes.length > COLLAPSE_THRESHOLD}
+        >
+          <QuoteList
+            quotes={notableQuotes}
+            empty="No relevant quotes captured."
+            source={source}
+          />
+        </CollapsibleSectionCard>
+
+        {/* 8. Follow-up Questions */}
         <SectionCard
-          title="Opinions And Assumptions"
-          count={opinions.length + assumptions.length + hearsay.length}
+          title="Follow-up Questions"
+          count={followUpQuestions.length}
           icon={CircleHelp}
         >
-          <div className="space-y-4">
-            <EvidenceList
-              items={opinions}
-              empty="No opinions extracted."
-              source={source}
-            />
-            <EvidenceList
-              items={assumptions}
-              empty="No assumptions extracted."
-              source={source}
-            />
-            <EvidenceList
-              items={hearsay}
-              empty="No hearsay extracted."
-              source={source}
-            />
-          </div>
+          {followUpQuestions.length > 0 ? (
+            <ul className="list-inside list-disc space-y-2 text-sm leading-relaxed">
+              {followUpQuestions.map((question, i) => (
+                <li key={i}>{question.description}</li>
+              ))}
+            </ul>
+          ) : (
+            <EmptyState>No follow-up questions suggested.</EmptyState>
+          )}
         </SectionCard>
-      </div>
-
-      <SectionCard
-        title="Observations"
-        count={observations.length}
-        icon={Eye}
-      >
-        <EvidenceList
-          items={observations}
-          empty="No direct observations extracted."
-          source={source}
-        />
-      </SectionCard>
-
-      <div className="grid gap-6 lg:grid-cols-2">
-        <SectionCard
-          title="Missing Info And Follow-Up"
-          count={
-            missingInformation.length +
-            followUpQuestions.length +
-            recommendedNextInterviews.length
-          }
-          icon={FileQuestion}
-        >
-          <div className="space-y-4">
-            <EvidenceList
-              items={missingInformation}
-              empty="No missing information identified."
-              source={source}
-            />
-            <EvidenceList
-              items={followUpQuestions}
-              empty="No follow-up questions proposed."
-              source={source}
-            />
-            <EvidenceList
-              items={recommendedNextInterviews}
-              empty="No next interviews recommended."
-              source={source}
-            />
-          </div>
-        </SectionCard>
-
-        <SectionCard
-          title="Risk Areas"
-          count={riskAreas.length}
-          icon={ShieldAlert}
-        >
-          <EvidenceList
-            items={riskAreas}
-            empty="No risk areas identified."
-            source={source}
-          />
-        </SectionCard>
-      </div>
-
-      <SectionCard title="Potential Witnesses" count={potentialWitnesses.length} icon={Users}>
-        <WitnessList witnesses={potentialWitnesses} source={source} />
-      </SectionCard>
-
-      <SectionCard
-        title="Consolidated Witnesses"
-        count={consolidatedWitnesses.length}
-        icon={UserCheck}
-      >
-        <ConsolidatedWitnessList
-          witnesses={consolidatedWitnesses}
-          source={source}
-        />
-      </SectionCard>
-
-      <SectionCard title="Key Events" count={keyEvents.length} icon={ClipboardList}>
-        {keyEvents.length > 0 ? (
-          <ul className="space-y-2 text-sm">
-            {keyEvents.map((event, i) => (
-              <li key={i} className="space-y-1 leading-relaxed">
-                <p>
-                  <span className="text-muted-foreground font-medium">
-                    {event.date ?? "Unknown date"}:
-                  </span>{" "}
-                  {event.description}
-                </p>
-                {(event.participants ?? []).length > 0 ? (
-                  <p className="text-muted-foreground">
-                    Participants: {(event.participants ?? []).join(", ")}
-                  </p>
-                ) : null}
-                <SourcePages pages={event.sourcePages} source={source} />
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <EmptyState>No key events identified.</EmptyState>
-        )}
-      </SectionCard>
-
-      <SectionCard title="Notable Quotes" count={notableQuotes.length} icon={MessageSquareQuote}>
-        <QuoteList quotes={notableQuotes} source={source} />
-      </SectionCard>
-
-      <Card>
-        <details>
-          <summary className="cursor-pointer list-none">
-            <CardHeader>
-              <CardTitle className="text-base">
-                Page-Level Findings{" "}
-                <span className="text-muted-foreground font-normal">
-                  ({pageFindings.length})
-                </span>
-              </CardTitle>
-            </CardHeader>
-          </summary>
-          <CardContent className="space-y-4 pt-6">
-            {pageFindings.length > 0 ? (
-              pageFindings.map((page) => (
-                <div key={page.sourcePage} className="space-y-2 border-b pb-4 text-sm last:border-0">
-                  <SourcePages pages={[page.sourcePage]} source={source} />
-                  <p className="text-muted-foreground">
-                    {page.allegations.length} allegations /{" "}
-                    {page.factualStatements.length} facts /{" "}
-                    {page.opinions.length} opinions /{" "}
-                    {(page.hearsay ?? []).length} hearsay /{" "}
-                    {(page.observations ?? []).length} observations /{" "}
-                    {page.notableQuotes.length} quotes /{" "}
-                    {page.relevantEvents.length} events
-                  </p>
-                </div>
-              ))
-            ) : (
-              <EmptyState>No page-level findings stored.</EmptyState>
-            )}
-          </CardContent>
-        </details>
-      </Card>
-
-      <Card>
-        <details>
-          <summary className="cursor-pointer list-none">
-            <CardHeader>
-              <CardTitle className="text-base">
-                People Mentioned{" "}
-                <span className="text-muted-foreground font-normal">
-                  ({peopleMentioned.length})
-                </span>
-              </CardTitle>
-            </CardHeader>
-          </summary>
-          <CardContent className="pt-6">
-            {peopleMentioned.length > 0 ? (
-              <ul className="list-inside list-disc space-y-1 text-sm">
-                {peopleMentioned.map((person, i) => (
-                  <li key={i}>{person}</li>
-                ))}
-              </ul>
-            ) : (
-              <EmptyState>None mentioned.</EmptyState>
-            )}
-          </CardContent>
-        </details>
-      </Card>
-
-      <Card>
-        <details>
-          <summary className="cursor-pointer list-none">
-            <CardHeader>
-              <CardTitle className="text-base">
-                Canonical Identities{" "}
-                <span className="text-muted-foreground font-normal">
-                  ({canonicalIdentities.length})
-                </span>
-              </CardTitle>
-            </CardHeader>
-          </summary>
-          <CardContent className="space-y-3 pt-6">
-            {canonicalIdentities.length > 0 ? (
-              canonicalIdentities.map((identity, i) => (
-                <div key={i} className="space-y-1 text-sm">
-                  <p className="font-medium">{identity.canonicalName}</p>
-                  <p className="text-muted-foreground">
-                    Role: {identity.role ?? "Unknown"}
-                    {(identity.variants ?? []).length > 0
-                      ? ` / Variants: ${(identity.variants ?? []).join(", ")}`
-                      : ""}
-                  </p>
-                  <SourcePages pages={identity.sourcePages} source={source} />
-                </div>
-              ))
-            ) : (
-              <EmptyState>No canonical identities stored.</EmptyState>
-            )}
-          </CardContent>
-        </details>
-      </Card>
       </div>
     </SourceViewerContext.Provider>
   );

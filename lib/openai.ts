@@ -69,7 +69,7 @@ For the provided source label, extract:
 2. Extraction warnings: uncertainty, unreliable speaker labels, ambiguous interviewee identity, missing answer attribution, poor source quality, unavailable pagination, or places where a source unit is too thin to assess.
 3. Investigation scope: primary claimant(s), primary accused person(s), the actual issue under investigation, primary allegations, and secondary observations.
 4. Allegations: claims, accusations, complaints, or alleged misconduct. For each, identify who is making the allegation, who is the subject, what exactly is alleged, whether it is primary or secondary, supporting evidence, contradictory evidence, missing evidence, relevant quotes, witnesses, follow-up questions, risk areas, and sourcePages.
-5. Factual statements: concrete claims of fact, dates, procedural steps, actions taken, communications, decisions, or things the interviewee says occurred. Do not mix these with opinions.
+5. Factual statements: concrete claims of fact, dates, procedural steps, actions taken, communications, decisions, or things the interviewee says occurred. Do not mix these with opinions. For each factual statement, include supportingQuotes containing the verbatim transcript sentence(s) the fact is drawn from, copied exactly from the source — never paraphrase, summarize, translate, or invent a quote. Leave supportingQuotes empty only when no verbatim quote in the transcript supports the fact.
 6. Opinions: subjective evaluations, beliefs, judgments, impressions, interpretations, characterizations, or motive attributions.
 7. Assumptions: statements that are speculative, inferred, uncertain, or not based on direct knowledge.
 8. Hearsay: statements relaying what someone else allegedly said, saw, believed, reported, or experienced.
@@ -77,7 +77,7 @@ For the provided source label, extract:
 10. Notable quotes: complete, contextual sentences useful for findings, contradictions, credibility, motive, knowledge, or chronology.
 11. Supporting evidence: statements or documents mentioned that support an allegation or relevant finding.
 12. Contradictory evidence: statements or documents mentioned that refute, weaken, conflict with, or complicate an allegation or relevant finding.
-13. Potential witnesses: people who may confirm, refute, contextualize, or add evidence.
+13. Potential witnesses: people who may confirm, refute, contextualize, or add evidence. For each witness, include supportingQuotes containing the verbatim transcript sentence(s) that mention them or explain why they may be relevant, copied exactly from the source — never paraphrase, translate, or invent a quote. Leave supportingQuotes empty only when no verbatim quote supports the witness.
 14. Recommended next interviews: people or roles to interview next and why.
 15. Relevant events: dated or sequenceable happenings, procedural steps, meetings, reports, decisions, or incidents.
 16. People mentioned and canonical identities: deduplicated canonical people only, with likely transcription variants merged.
@@ -96,6 +96,7 @@ Rules:
 - Clearly distinguish direct observations from hearsay, opinions, assumptions, and factual statements.
 - Use null rather than guessing a date, claimant, subject, role, speaker, or metadata value.
 - Supporting evidence and contradictory evidence must be tied to what appears in this source unit. Use a page citation only when real pagination is available.
+- Quote text in supportingQuotes, relevantQuotes, and notableQuotes must be copied verbatim from the transcript. Never fabricate, paraphrase, translate, or shorten a quote; if no exact transcript quote supports the item, leave its quote list empty.
 - Missing information, follow-up questions, recommended next interviews, and risk areas should almost always contain items. Return an empty array only when the transcript genuinely leaves no reasonable investigation gap, question, interview, or risk.
 - If evidence is not tied to a specific allegation on this page, still include it in the page-level supportingEvidence or contradictoryEvidence arrays.
 
@@ -187,12 +188,12 @@ Expected schema:
     }
   ],
   "notableQuotes": [{ "speaker": string | null, "text": string, "sourcePages": string[] }],
-  "factualStatements": [{ "description": string, "sourcePages": string[] }],
+  "factualStatements": [{ "description": string, "supportingQuotes": [{ "speaker": string | null, "text": string, "sourcePages": string[] }], "sourcePages": string[] }],
   "opinions": [{ "description": string, "sourcePages": string[] }],
   "assumptions": [{ "description": string, "sourcePages": string[] }],
   "hearsay": [{ "description": string, "sourcePages": string[] }],
   "observations": [{ "description": string, "sourcePages": string[] }],
-  "potentialWitnesses": [{ "name": string, "relevance": string, "sourcePages": string[] }],
+  "potentialWitnesses": [{ "name": string, "relevance": string, "supportingQuotes": [{ "speaker": string | null, "text": string, "sourcePages": string[] }], "sourcePages": string[] }],
   "consolidatedWitnesses": [{ "name": string, "whyTheyMatter": string, "relatedAllegations": string[], "mentionedInInterviews": string[], "priorityScore": number, "sourcePages": string[] }],
   "missingInformation": [{ "description": string, "sourcePages": string[] }],
   "followUpQuestions": [{ "description": string, "sourcePages": string[] }],
@@ -280,6 +281,7 @@ You will receive JSON extraction drafts from separate document pages. Consolidat
 - Mark allegations as "primary" only when they belong to the main investigation
   scope. Mark contextual issues as "secondary".
 - Keep quote text as complete, contextual sentences. Remove fragments and duplicate quotes.
+- Preserve each factual statement's and witness's supportingQuotes verbatim from the drafts, keeping their sourcePages. Deduplicate identical quotes, but never fabricate, paraphrase, translate, or shorten a quote, and never add a quote that is not present in the drafts.
 - Produce a concise investigation-focused summary of the whole document that surfaces allegations, evidence, contradictions, missing information, and investigative impact. Do not write a generic meeting summary.
 - For every major allegation, clearly answer: what allegation is being discussed, who makes it, who is the subject, what supports it, what contradicts it, what is missing, which witnesses may confirm/refute it, what follow-up questions should be asked, what risk areas require further investigation, and how this interview affects the investigation.
 - Always produce missingInformation, followUpQuestions, recommendedNextInterviews,
@@ -341,12 +343,12 @@ Expected schema:
     }
   ],
   "notableQuotes": [{ "speaker": string | null, "text": string, "sourcePages": string[] }],
-  "factualStatements": [{ "description": string, "sourcePages": string[] }],
+  "factualStatements": [{ "description": string, "supportingQuotes": [{ "speaker": string | null, "text": string, "sourcePages": string[] }], "sourcePages": string[] }],
   "opinions": [{ "description": string, "sourcePages": string[] }],
   "assumptions": [{ "description": string, "sourcePages": string[] }],
   "hearsay": [{ "description": string, "sourcePages": string[] }],
   "observations": [{ "description": string, "sourcePages": string[] }],
-  "potentialWitnesses": [{ "name": string, "relevance": string, "sourcePages": string[] }],
+  "potentialWitnesses": [{ "name": string, "relevance": string, "supportingQuotes": [{ "speaker": string | null, "text": string, "sourcePages": string[] }], "sourcePages": string[] }],
   "consolidatedWitnesses": [{ "name": string, "whyTheyMatter": string, "relatedAllegations": string[], "mentionedInInterviews": string[], "priorityScore": number, "sourcePages": string[] }],
   "missingInformation": [{ "description": string, "sourcePages": string[] }],
   "followUpQuestions": [{ "description": string, "sourcePages": string[] }],
@@ -609,6 +611,106 @@ function stampChunkProvenance(
 }
 
 /**
+ * Index the verbatim quotes the per-page drafts attached to each fact, witness,
+ * and allegation, keyed by the item's text. The consolidation model routinely
+ * drops these nested quote arrays when merging drafts (the same way it drops
+ * sourcePages), so we restore them deterministically afterwards rather than
+ * trusting the merge to carry them through.
+ */
+type SupportingQuoteIndex = {
+  facts: Map<string, QuoteItem[]>;
+  witnesses: Map<string, QuoteItem[]>;
+  allegations: Map<string, QuoteItem[]>;
+};
+
+/** The text key an allegation is indexed/looked up by (matches the UI title). */
+function allegationQuoteKey(allegation: AllegationItem): string {
+  return allegation.allegation || allegation.description;
+}
+
+function addSupportingQuotes(
+  index: Map<string, QuoteItem[]>,
+  text: string,
+  quotes: QuoteItem[]
+): void {
+  const key = normalizeForComparison(text);
+  if (!key || quotes.length === 0) return;
+  const existing = index.get(key) ?? [];
+  index.set(
+    key,
+    normalizeQuoteItems([...existing, ...quotes], SUPPORTING_QUOTE_MIN_LENGTH)
+  );
+}
+
+function buildSupportingQuoteIndex(
+  drafts: ExtractionResponse[]
+): SupportingQuoteIndex {
+  const facts = new Map<string, QuoteItem[]>();
+  const witnesses = new Map<string, QuoteItem[]>();
+  const allegations = new Map<string, QuoteItem[]>();
+
+  for (const draft of drafts) {
+    for (const fact of draft.factualStatements) {
+      addSupportingQuotes(facts, fact.description, fact.supportingQuotes);
+    }
+    for (const witness of draft.potentialWitnesses) {
+      addSupportingQuotes(witnesses, witness.name, witness.supportingQuotes);
+    }
+    for (const allegation of draft.allegations) {
+      addSupportingQuotes(
+        allegations,
+        allegationQuoteKey(allegation),
+        allegation.relevantQuotes
+      );
+      // Witnesses also surface attached to specific allegations; index those too.
+      for (const witness of allegation.witnesses) {
+        addSupportingQuotes(witnesses, witness.name, witness.supportingQuotes);
+      }
+    }
+  }
+
+  return { facts, witnesses, allegations };
+}
+
+/**
+ * Restore each fact's, witness's, and allegation's quotes from the drafts when
+ * consolidation returned none. Items consolidation reworded past recognition
+ * keep whatever the model returned (usually empty), mirroring how
+ * `backfillSourcePages` leaves unrecognized items uncited rather than guessing.
+ */
+function backfillSupportingQuotes(
+  response: ExtractionResponse,
+  index: SupportingQuoteIndex
+): ExtractionResponse {
+  return {
+    ...response,
+    factualStatements: response.factualStatements.map((fact) => ({
+      ...fact,
+      supportingQuotes:
+        fact.supportingQuotes.length > 0
+          ? fact.supportingQuotes
+          : index.facts.get(normalizeForComparison(fact.description)) ?? [],
+    })),
+    potentialWitnesses: response.potentialWitnesses.map((witness) => ({
+      ...witness,
+      supportingQuotes:
+        witness.supportingQuotes.length > 0
+          ? witness.supportingQuotes
+          : index.witnesses.get(normalizeForComparison(witness.name)) ?? [],
+    })),
+    allegations: response.allegations.map((allegation) => ({
+      ...allegation,
+      relevantQuotes:
+        allegation.relevantQuotes.length > 0
+          ? allegation.relevantQuotes
+          : index.allegations.get(
+              normalizeForComparison(allegationQuoteKey(allegation))
+            ) ?? [],
+    })),
+  };
+}
+
+/**
  * Restore page citations dropped during consolidation by matching each
  * uncited item back to the drafts' `text -> pages` index. Items consolidation
  * reworded past recognition simply stay uncited rather than get a wrong page.
@@ -636,7 +738,8 @@ function applySourcePages(
 ): ExtractionResponse {
   type Evidence = { description: string; sourcePages: string[] };
   type Quote = { text: string; sourcePages: string[] };
-  type Witness = { name: string; sourcePages: string[] };
+  type Fact = Evidence & { supportingQuotes: Quote[] };
+  type Witness = { name: string; supportingQuotes: Quote[]; sourcePages: string[] };
   type Event = { description: string; sourcePages: string[] };
 
   const evidence = <T extends Evidence>(items: T[]): T[] =>
@@ -649,9 +752,18 @@ function applySourcePages(
       ...item,
       sourcePages: resolve(item.text, item.sourcePages),
     }));
+  // Facts and witnesses each carry the verbatim supportingQuotes they were drawn
+  // from; stamp/backfill those nested quotes' pages alongside the item itself.
+  const facts = <T extends Fact>(items: T[]): T[] =>
+    items.map((item) => ({
+      ...item,
+      supportingQuotes: quotes(item.supportingQuotes),
+      sourcePages: resolve(item.description, item.sourcePages),
+    }));
   const witnesses = <T extends Witness>(items: T[]): T[] =>
     items.map((item) => ({
       ...item,
+      supportingQuotes: quotes(item.supportingQuotes),
       sourcePages: resolve(item.name, item.sourcePages),
     }));
   const events = <T extends Event>(items: T[]): T[] =>
@@ -685,7 +797,7 @@ function applySourcePages(
     })),
     keyEvents: events(response.keyEvents),
     notableQuotes: quotes(response.notableQuotes),
-    factualStatements: evidence(response.factualStatements),
+    factualStatements: facts(response.factualStatements),
     opinions: evidence(response.opinions),
     assumptions: evidence(response.assumptions),
     hearsay: evidence(response.hearsay),
@@ -800,8 +912,12 @@ export async function consolidateExtractions(
   // drops `sourcePages` arrays entirely, so we restore each item's page(s) from
   // the drafts rather than depending on the model to carry them through.
   const pageIndex = buildPageIndex(drafts);
+  const quoteIndex = buildSupportingQuoteIndex(drafts);
   const consolidated = await reduceDrafts(drafts, options);
-  return backfillSourcePages(consolidated, pageIndex);
+  // Restore the verbatim supportingQuotes consolidation drops, then fill any
+  // remaining empty page citations (including on the just-restored quotes).
+  const withQuotes = backfillSupportingQuotes(consolidated, quoteIndex);
+  return backfillSourcePages(withQuotes, pageIndex);
 }
 
 async function reduceDrafts(
@@ -955,7 +1071,7 @@ function normalizeExtractionResponse(
   const allegations = normalizeAllegations(extraction.allegations);
   const keyEvents = normalizeEvents(extraction.keyEvents);
   const notableQuotes = normalizeQuoteItems(extraction.notableQuotes);
-  const factualStatements = normalizeEvidenceItems(extraction.factualStatements);
+  const factualStatements = normalizeFactItems(extraction.factualStatements);
   const opinions = normalizeEvidenceItems(extraction.opinions);
   const assumptions = normalizeEvidenceItems(extraction.assumptions);
   const hearsay = normalizeEvidenceItems(extraction.hearsay);
@@ -1044,7 +1160,8 @@ function normalizeExtractionResponse(
   };
 }
 
-type EvidenceItem = ExtractionResponse["factualStatements"][number];
+type EvidenceItem = ExtractionResponse["opinions"][number];
+type FactItem = ExtractionResponse["factualStatements"][number];
 type QuoteItem = ExtractionResponse["notableQuotes"][number];
 type WitnessItem = ExtractionResponse["potentialWitnesses"][number];
 type ConsolidatedWitnessItem =
@@ -1079,7 +1196,10 @@ function normalizeAllegations(allegations: AllegationItem[]): AllegationItem[] {
             allegation.contradictoryEvidence
           ),
           missingEvidence: uniqueTrimmed(allegation.missingEvidence),
-          relevantQuotes: normalizeQuoteItems(allegation.relevantQuotes),
+          relevantQuotes: normalizeQuoteItems(
+            allegation.relevantQuotes,
+            SUPPORTING_QUOTE_MIN_LENGTH
+          ),
           witnesses: normalizeWitnessItems(allegation.witnesses),
           followUpQuestions: uniqueTrimmed(allegation.followUpQuestions),
           riskAreas: uniqueTrimmed(allegation.riskAreas),
@@ -1162,12 +1282,35 @@ function normalizeEvidenceItems(items: EvidenceItem[]): EvidenceItem[] {
   );
 }
 
+function normalizeFactItems(items: FactItem[]): FactItem[] {
+  return dedupeByKey(
+    items
+      .map((item) => ({
+        description: item.description.trim(),
+        supportingQuotes: normalizeQuoteItems(
+          item.supportingQuotes,
+          SUPPORTING_QUOTE_MIN_LENGTH
+        ),
+        sourcePages: normalizeSourcePages(item.sourcePages),
+      }))
+      .filter((item) => item.description.length > 0),
+    (item) =>
+      [normalizeForComparison(item.description), item.sourcePages.join(",")].join(
+        "|"
+      )
+  );
+}
+
 function normalizeWitnessItems(items: WitnessItem[]): WitnessItem[] {
   return dedupeByKey(
     items
       .map((item) => ({
         name: normalizeMetadataName(item.name) ?? item.name.trim(),
         relevance: item.relevance.trim(),
+        supportingQuotes: normalizeQuoteItems(
+          item.supportingQuotes,
+          SUPPORTING_QUOTE_MIN_LENGTH
+        ),
         sourcePages: normalizeSourcePages(item.sourcePages),
       }))
       .filter((item) => item.name.length > 0 && item.relevance.length > 0),
@@ -1228,7 +1371,20 @@ function normalizeIdentityItems(items: IdentityItem[]): IdentityItem[] {
   );
 }
 
-function normalizeQuoteItems(quotes: QuoteItem[]): QuoteItem[] {
+/**
+ * `notableQuotes` are free-standing context quotes, so we reject short fragments
+ * to keep the list meaningful. Supporting/relevant quotes are evidence
+ * deliberately tied to a specific fact, witness, or allegation and are often
+ * short on purpose (e.g. "C'est humiliant."), so they use a much lower floor —
+ * only empty/near-empty strings are dropped.
+ */
+const NOTABLE_QUOTE_MIN_LENGTH = 20;
+const SUPPORTING_QUOTE_MIN_LENGTH = 2;
+
+function normalizeQuoteItems(
+  quotes: QuoteItem[],
+  minLength: number = NOTABLE_QUOTE_MIN_LENGTH
+): QuoteItem[] {
   return dedupeByKey(
     quotes
       .map((quote) => ({
@@ -1236,7 +1392,7 @@ function normalizeQuoteItems(quotes: QuoteItem[]): QuoteItem[] {
         text: quote.text.trim().replace(/\s+/g, " "),
         sourcePages: normalizeSourcePages(quote.sourcePages),
       }))
-      .filter((quote) => quote.text.length >= 20),
+      .filter((quote) => quote.text.length >= minLength),
     (quote) =>
       [
         quote.speaker ?? "",

@@ -44,6 +44,15 @@ const quoteItemSchema = z.object({
   sourcePages: sourcePagesSchema,
 });
 
+// A factual statement plus the verbatim transcript quote(s) it was drawn from.
+// The supporting quote is the evidence the investigator clicks through to; the
+// model is instructed to copy quote text exactly and never fabricate one.
+const factItemSchema = z.object({
+  description: z.string(),
+  supportingQuotes: z.array(quoteItemSchema).default([]),
+  sourcePages: sourcePagesSchema,
+});
+
 const eventItemSchema = z.object({
   date: nullableMetadataString.default(null),
   description: z.string(),
@@ -54,6 +63,7 @@ const eventItemSchema = z.object({
 const witnessItemSchema = z.object({
   name: z.string(),
   relevance: z.string(),
+  supportingQuotes: z.array(quoteItemSchema).default([]),
   sourcePages: sourcePagesSchema,
 });
 
@@ -196,7 +206,7 @@ export const extractedDataSchema = z.object({
   canonicalIdentities: z.array(identityItemSchema).default([]),
   keyEvents: z.array(eventItemSchema).default([]),
   notableQuotes: z.array(quoteItemSchema).default([]),
-  factualStatements: z.array(evidenceItemSchema).default([]),
+  factualStatements: z.array(factItemSchema).default([]),
   opinions: z.array(evidenceItemSchema).default([]),
   assumptions: z.array(evidenceItemSchema).default([]),
   hearsay: z.array(evidenceItemSchema).default([]),
