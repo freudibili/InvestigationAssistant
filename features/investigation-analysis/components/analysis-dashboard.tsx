@@ -1,11 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   ArrowRight,
   CalendarClock,
+  CheckCircle2,
+  Circle,
   FileText,
   Gavel,
   HelpCircle,
@@ -19,6 +21,14 @@ import { toast } from "sonner";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { queryKeys } from "@/lib/query-keys";
 import {
   assessConductAction,
@@ -58,6 +68,14 @@ const CONDUCT_CATEGORY_LABELS = [
   "Violence",
   "Racism",
 ];
+
+type GlobalCalculationPhase =
+  | "idle"
+  | "conduct"
+  | "overall"
+  | "updating"
+  | "complete"
+  | "error";
 
 function verdictVariant(
   verdict: string
@@ -202,31 +220,79 @@ function OverallAssessmentCard({
   caseId: string;
   analysis: InvestigationAnalysis;
 }) {
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [calculationPhase, setCalculationPhase] =
+    useState<GlobalCalculationPhase>("idle");
+  const [completedAssessmentCount, setCompletedAssessmentCount] = useState(0);
   const [isPending, startTransition] = useTransition();
   const queryClient = useQueryClient();
   const assessedCount = analysis.reproches.filter(
     (reproche) => reproche.conductAssessment
   ).length;
-  const canCalculate =
-    analysis.reproches.length > 0 && assessedCount === analysis.reproches.length;
+  const missingAssessmentReproches = analysis.reproches.filter(
+    (reproche) => !reproche.conductAssessment
+  );
+  const missingAssessmentCount = analysis.reproches.length - assessedCount;
+  const canCalculate = analysis.reproches.length > 0;
   const assessment = analysis.overallConductAssessment;
+  const isCalculating =
+    isPending ||
+    calculationPhase === "conduct" ||
+    calculationPhase === "overall" ||
+    calculationPhase === "updating";
+
+  function openConfirmDialog() {
+    setCalculationPhase("idle");
+    setCompletedAssessmentCount(0);
+    setConfirmOpen(true);
+  }
+
+  function handleConfirmOpenChange(open: boolean) {
+    if (isCalculating) return;
+    setConfirmOpen(open);
+    if (!open) {
+      setCalculationPhase("idle");
+      setCompletedAssessmentCount(0);
+    }
+  }
 
   function handleAssessOverallConduct() {
     startTransition(async () => {
+      let latestAnalysis = analysis;
+      setCalculationPhase("conduct");
+      setCompletedAssessmentCount(0);
+
+      for (const [index, reproche] of missingAssessmentReproches.entries()) {
+        const result = await assessConductAction(caseId, reproche.id);
+        if (!result.ok) {
+          setCalculationPhase("error");
+          toast.error(result.message);
+          return;
+        }
+
+        latestAnalysis = result.analysis;
+        setCompletedAssessmentCount(index + 1);
+      }
+
+      setCalculationPhase("overall");
       const result = await assessOverallConductAction(caseId);
       if (!result.ok) {
+        setCalculationPhase("error");
         toast.error(result.message);
         return;
       }
 
+      latestAnalysis = result.analysis;
+      setCalculationPhase("updating");
       queryClient.setQueryData<CaseAnalysisResponse>(
         queryKeys.analysis(caseId),
         (current) => ({
           status: current?.status ?? "ready",
-          generatedAt: current?.generatedAt ?? result.analysis.generatedAt,
-          analysis: result.analysis,
+          generatedAt: current?.generatedAt ?? latestAnalysis.generatedAt,
+          analysis: latestAnalysis,
         })
       );
+      setCalculationPhase("complete");
     });
   }
 
@@ -240,39 +306,213 @@ function OverallAssessmentCard({
           {assessment ? (
             <ConductAssessmentPanel
               assessment={assessment}
-              isPending={isPending}
-              onReassess={handleAssessOverallConduct}
+              isPending={isCalculating}
+              onReassess={openConfirmDialog}
             />
           ) : (
             <Button
               type="button"
               size="sm"
-              onClick={handleAssessOverallConduct}
-              disabled={!canCalculate || isPending}
+              onClick={openConfirmDialog}
+              disabled={!canCalculate || isCalculating}
               title={
                 canCalculate
                   ? undefined
-                  : `Run conduct assessment for all grievances first (${assessedCount}/${analysis.reproches.length}).`
+                  : "No grievances available to calculate."
               }
             >
-              {isPending ? (
+              {isCalculating ? (
                 <Loader2 className="animate-spin" />
               ) : (
                 <Sparkles />
               )}
-              {isPending ? "Calculating..." : "Calculate global result"}
+              {isCalculating ? "Calculating..." : "Calculate global result"}
             </Button>
           )}
-          {!canCalculate ? (
+          {missingAssessmentCount > 0 ? (
             <p className="text-muted-foreground text-xs">
-              Conduct assessments completed: {assessedCount}/
-              {analysis.reproches.length}
+              This will automatically calculate {missingAssessmentCount} missing
+              grievance assessment{missingAssessmentCount === 1 ? "" : "s"} first.
             </p>
           ) : null}
         </div>
       </CardContent>
+      <Dialog open={confirmOpen} onOpenChange={handleConfirmOpenChange}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Calculate global result?</DialogTitle>
+            <DialogDescription>
+              This can calculate every missing grievance assessment before the
+              global result. It is faster, but it is better to review each
+              grievance manually first so the final result reflects investigator
+              judgement.
+            </DialogDescription>
+          </DialogHeader>
+          {missingAssessmentCount > 0 ? (
+            <p className="text-muted-foreground text-sm">
+              Missing grievance assessments: {missingAssessmentCount}/
+              {analysis.reproches.length}
+            </p>
+          ) : null}
+          <GlobalCalculationSteps
+            phase={calculationPhase}
+            missingAssessmentCount={missingAssessmentCount}
+            completedAssessmentCount={completedAssessmentCount}
+          />
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => handleConfirmOpenChange(false)}
+              disabled={isCalculating}
+            >
+              {calculationPhase === "complete" ? "Close" : "Review manually"}
+            </Button>
+            {calculationPhase !== "complete" ? (
+              <Button
+                type="button"
+                onClick={handleAssessOverallConduct}
+                disabled={isCalculating}
+              >
+                {isCalculating ? (
+                  <Loader2 className="animate-spin" />
+                ) : (
+                  <Sparkles />
+                )}
+                {isCalculating ? "Calculating..." : "Calculate all"}
+              </Button>
+            ) : null}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Card>
   );
+}
+
+function GlobalCalculationSteps({
+  phase,
+  missingAssessmentCount,
+  completedAssessmentCount,
+}: {
+  phase: GlobalCalculationPhase;
+  missingAssessmentCount: number;
+  completedAssessmentCount: number;
+}) {
+  const hasMissingAssessments = missingAssessmentCount > 0;
+  const steps = [
+    {
+      id: "conduct",
+      label: hasMissingAssessments
+        ? "Calculate missing grievance assessments"
+        : "Check grievance assessments",
+      detail: hasMissingAssessments
+        ? `${completedAssessmentCount}/${missingAssessmentCount} completed`
+        : "All grievance assessments are ready",
+      status: conductStepStatus(
+        phase,
+        missingAssessmentCount,
+        completedAssessmentCount
+      ),
+    },
+    {
+      id: "overall",
+      label: "Calculate global result",
+      detail: "Combine grievance assessments into the case result",
+      status: overallStepStatus(
+        phase,
+        missingAssessmentCount,
+        completedAssessmentCount
+      ),
+    },
+    {
+      id: "updating",
+      label: "Update dashboard",
+      detail: "Save and refresh the visible result",
+      status: updateStepStatus(phase),
+    },
+  ];
+
+  return (
+    <div className="space-y-2 rounded-md border bg-muted/20 p-3">
+      {steps.map((step) => (
+        <div key={step.id} className="flex items-start gap-3">
+          <StepIcon status={step.status} />
+          <div className="min-w-0 space-y-0.5">
+            <p className="text-sm font-medium">{step.label}</p>
+            <p className="text-muted-foreground text-xs">{step.detail}</p>
+          </div>
+        </div>
+      ))}
+      {phase === "error" ? (
+        <p className="text-destructive text-xs">
+          Calculation stopped. Review the message and try again.
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function StepIcon({
+  status,
+}: {
+  status: "pending" | "running" | "complete" | "error";
+}) {
+  if (status === "complete") {
+    return <CheckCircle2 className="mt-0.5 size-4 text-emerald-600" />;
+  }
+  if (status === "running") {
+    return <Loader2 className="text-muted-foreground mt-0.5 size-4 animate-spin" />;
+  }
+  if (status === "error") {
+    return <Circle className="text-destructive mt-0.5 size-4 fill-current" />;
+  }
+  return <Circle className="text-muted-foreground mt-0.5 size-4" />;
+}
+
+function conductStepStatus(
+  phase: GlobalCalculationPhase,
+  missingAssessmentCount: number,
+  completedAssessmentCount: number
+): "pending" | "running" | "complete" | "error" {
+  if (phase === "error") {
+    return completedAssessmentCount === missingAssessmentCount
+      ? "complete"
+      : "error";
+  }
+  if (missingAssessmentCount === 0) return "complete";
+  if (phase === "conduct") return "running";
+  if (
+    phase === "overall" ||
+    phase === "updating" ||
+    phase === "complete" ||
+    completedAssessmentCount === missingAssessmentCount
+  ) {
+    return "complete";
+  }
+  return "pending";
+}
+
+function overallStepStatus(
+  phase: GlobalCalculationPhase,
+  missingAssessmentCount: number,
+  completedAssessmentCount: number
+): "pending" | "running" | "complete" | "error" {
+  if (phase === "error") {
+    return completedAssessmentCount === missingAssessmentCount
+      ? "error"
+      : "pending";
+  }
+  if (phase === "overall") return "running";
+  if (phase === "updating" || phase === "complete") return "complete";
+  return "pending";
+}
+
+function updateStepStatus(
+  phase: GlobalCalculationPhase
+): "pending" | "running" | "complete" | "error" {
+  if (phase === "updating") return "running";
+  if (phase === "complete") return "complete";
+  return "pending";
 }
 
 function ReprocheCard({
@@ -289,6 +529,8 @@ function ReprocheCard({
   );
   const [isPending, startTransition] = useTransition();
   const queryClient = useQueryClient();
+  const cardRef = useRef<HTMLDivElement>(null);
+  const shouldRenderContent = useRenderWhenNearViewport(cardRef);
 
   function handleAssessConduct() {
     startTransition(async () => {
@@ -310,7 +552,7 @@ function ReprocheCard({
   }
 
   return (
-    <Card>
+    <Card ref={cardRef} className="[content-visibility:auto]">
       <CardHeader>
         <div className="flex flex-wrap items-start justify-between gap-2">
           <CardTitle className="text-base">{reproche.title}</CardTitle>
@@ -325,79 +567,130 @@ function ReprocheCard({
           <p className="text-muted-foreground text-sm">{reproche.description}</p>
         ) : null}
       </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="space-y-2">
-          <StatementBlock
-            label="Claimant"
-            caseId={caseId}
-            statement={reproche.claimantStatement}
-            lookups={lookups}
-          />
-          <StatementBlock
-            label="Accused"
-            caseId={caseId}
-            statement={reproche.accusedStatement}
-            lookups={lookups}
-          />
-          {reproche.referenceStatements.map((statement, index) => (
+      {shouldRenderContent ? (
+        <CardContent className="space-y-4">
+          <div className="space-y-2">
             <StatementBlock
-              key={index}
-              label={`Reference person ${index + 1}`}
+              label="Claimant"
               caseId={caseId}
-              statement={statement}
+              statement={reproche.claimantStatement}
               lookups={lookups}
             />
-          ))}
-        </div>
-
-        <div className="rounded-lg border bg-muted/30 p-3 space-y-2">
-          <p className="text-xs font-medium uppercase tracking-wide">
-            Findings and evaluation
-          </p>
-          {reproche.findings.length > 0 ? (
-            <ul className="list-disc space-y-1 pl-4 text-sm">
-              {reproche.findings.map((finding, index) => (
-                <li key={index}>{finding}</li>
-              ))}
-            </ul>
-          ) : null}
-          {reproche.evaluation ? (
-            <p className="text-sm leading-relaxed whitespace-pre-line">
-              {reproche.evaluation}
-            </p>
-          ) : null}
-        </div>
-
-        <div className="space-y-3">
-          {assessment ? (
-            <ConductAssessmentPanel
-              assessment={assessment}
-              isPending={isPending}
-              onReassess={handleAssessConduct}
+            <StatementBlock
+              label="Accused"
+              caseId={caseId}
+              statement={reproche.accusedStatement}
+              lookups={lookups}
             />
-          ) : (
-            <Button
-              type="button"
-              size="sm"
-              onClick={handleAssessConduct}
-              disabled={isPending}
-            >
-              {isPending ? (
-                <Loader2 className="animate-spin" />
-              ) : (
-                <Sparkles />
-              )}
-              {isPending ? "Analysing..." : "Analyse conduct"}
-            </Button>
-          )}
-        </div>
+            {reproche.referenceStatements.map((statement, index) => (
+              <StatementBlock
+                key={index}
+                label={`Reference person ${index + 1}`}
+                caseId={caseId}
+                statement={statement}
+                lookups={lookups}
+              />
+            ))}
+          </div>
 
-        {reproche.openQuestions.length > 0 ? (
-          <BulletList label="Open questions" items={reproche.openQuestions} />
-        ) : null}
-      </CardContent>
+          <div className="rounded-lg border bg-muted/30 p-3 space-y-2">
+            <p className="text-xs font-medium uppercase tracking-wide">
+              Findings and evaluation
+            </p>
+            {reproche.findings.length > 0 ? (
+              <ul className="list-disc space-y-1 pl-4 text-sm">
+                {reproche.findings.map((finding, index) => (
+                  <li key={index}>{finding}</li>
+                ))}
+              </ul>
+            ) : null}
+            {reproche.evaluation ? (
+              <p className="text-sm leading-relaxed whitespace-pre-line">
+                {reproche.evaluation}
+              </p>
+            ) : null}
+          </div>
+
+          <div className="space-y-3">
+            {assessment ? (
+              <ConductAssessmentPanel
+                assessment={assessment}
+                isPending={isPending}
+                onReassess={handleAssessConduct}
+              />
+            ) : (
+              <Button
+                type="button"
+                size="sm"
+                onClick={handleAssessConduct}
+                disabled={isPending}
+              >
+                {isPending ? (
+                  <Loader2 className="animate-spin" />
+                ) : (
+                  <Sparkles />
+                )}
+                {isPending ? "Analysing..." : "Analyse conduct"}
+              </Button>
+            )}
+          </div>
+
+          {reproche.openQuestions.length > 0 ? (
+            <BulletList label="Open questions" items={reproche.openQuestions} />
+          ) : null}
+        </CardContent>
+      ) : (
+        <DeferredCardContentPlaceholder />
+      )}
     </Card>
   );
+}
+
+function DeferredCardContentPlaceholder() {
+  return (
+    <CardContent className="space-y-4" aria-hidden="true">
+      <div className="space-y-2">
+        <div className="h-4 w-28 rounded bg-muted" />
+        <div className="h-3 w-full max-w-3xl rounded bg-muted/70" />
+        <div className="h-3 w-4/5 rounded bg-muted/70" />
+      </div>
+      <div className="space-y-2 rounded-lg border bg-muted/20 p-3">
+        <div className="h-3 w-36 rounded bg-muted" />
+        <div className="h-3 w-full max-w-2xl rounded bg-muted/70" />
+        <div className="h-3 w-2/3 rounded bg-muted/70" />
+      </div>
+    </CardContent>
+  );
+}
+
+function useRenderWhenNearViewport(ref: React.RefObject<Element | null>): boolean {
+  const [shouldRender, setShouldRender] = useState(false);
+
+  useEffect(() => {
+    if (shouldRender) return;
+
+    const node = ref.current;
+    if (!node) return;
+
+    if (!("IntersectionObserver" in window)) {
+      const timeoutId = setTimeout(() => setShouldRender(true), 0);
+      return () => clearTimeout(timeoutId);
+    }
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (!entry?.isIntersecting) return;
+        setShouldRender(true);
+        observer.disconnect();
+      },
+      { rootMargin: "900px 0px" }
+    );
+
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [ref, shouldRender]);
+
+  return shouldRender;
 }
 
 function ConductAssessmentPanel({
@@ -540,16 +833,20 @@ function StatementBlock({
   const name = statement.interviewId
     ? lookups.interviewNameById.get(statement.interviewId)
     : null;
-  const quotes = statement.quoteIds
-    .map((quoteId) => lookups.quoteById.get(quoteId))
-    .filter((quote): quote is QuoteRef =>
-      Boolean(
-        quote &&
-          quote.documentId === statement.interviewId &&
-          quote.provenanceId &&
-          quote.page
-      )
-    );
+  const quotes = useMemo(
+    () =>
+      statement.quoteIds
+        .map((quoteId) => lookups.quoteById.get(quoteId))
+        .filter((quote): quote is QuoteRef =>
+          Boolean(
+            quote &&
+              quote.documentId === statement.interviewId &&
+              quote.provenanceId &&
+              quote.page
+          )
+        ),
+    [lookups, statement.interviewId, statement.quoteIds]
+  );
 
   return (
     <div className="rounded-md border-l-2 border-muted pl-3 py-1">
@@ -584,7 +881,10 @@ function InlineEvidenceText({
   quotes: QuoteRef[];
 }) {
   const openViewer = useSourceViewer();
-  const segments = buildInlineEvidenceSegments(text, quotes);
+  const segments = useMemo(
+    () => buildInlineEvidenceSegments(text, quotes),
+    [text, quotes]
+  );
 
   function openQuote(quote: QuoteRef) {
     openViewer?.({
@@ -614,7 +914,7 @@ function InlineEvidenceText({
             key={index}
             type="button"
             onClick={() => openQuote(segment.quote)}
-            className="rounded-sm border bg-muted px-1.5 font-medium italic text-foreground underline decoration-muted-foreground/70 underline-offset-2 transition-colors hover:bg-muted/70 hover:decoration-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1"
+            className="rounded-sm border bg-muted px-1.5 text-left font-medium italic text-foreground underline decoration-muted-foreground/70 underline-offset-2 transition-colors hover:bg-muted/70 hover:decoration-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1"
           >
             {segment.fragment}
           </button>

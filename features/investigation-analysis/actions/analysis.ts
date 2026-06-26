@@ -139,6 +139,43 @@ export async function assessOverallConductAction(
   }
 }
 
+export async function assessAllConductAction(
+  caseId: string
+): Promise<AssessConductResult> {
+  try {
+    const { analysis } = await getCaseAnalysis(caseId);
+    if (!analysis) {
+      return { ok: false, message: "No saved analysis found for this case." };
+    }
+    if (analysis.reproches.length === 0) {
+      return { ok: false, message: "No grievances available to calculate." };
+    }
+
+    let currentAnalysis = analysis;
+    for (const reproche of analysis.reproches) {
+      if (reproche.conductAssessment) continue;
+
+      const assessment = await assessReprocheConduct(reproche);
+      currentAnalysis = await saveConductAssessment(
+        caseId,
+        reproche.id,
+        assessment
+      );
+    }
+
+    const overallAssessment = await assessGlobalConduct(currentAnalysis);
+    const savedAnalysis = await saveOverallConductAssessment(
+      caseId,
+      overallAssessment
+    );
+    revalidatePath(`/cases/${caseId}/analysis`);
+    return { ok: true, assessment: overallAssessment, analysis: savedAnalysis };
+  } catch (error) {
+    logConductAssessmentFailure({ reprocheId: "all", error });
+    return { ok: false, message: toConductAssessmentUserMessage(error) };
+  }
+}
+
 function isCanceledAnalysis(error: unknown): error is Error {
   return error instanceof Error && /canceled|superseded/i.test(error.message);
 }

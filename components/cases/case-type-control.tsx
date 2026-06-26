@@ -21,6 +21,8 @@ import {
   type CaseType,
 } from "@/lib/types";
 
+const UNCLASSIFIED_CASE_TYPE_VALUE = "__unclassified";
+
 /**
  * Shows the case type and lets the investigator set, confirm, or override it.
  * Three states:
@@ -44,14 +46,19 @@ export function CaseTypeControl({ investigationCase }: { investigationCase: Case
 
   const picker = (
     <Select
-      value={caseType ?? ""}
-      onValueChange={(v) => apply(v as CaseType)}
+      value={caseType ?? UNCLASSIFIED_CASE_TYPE_VALUE}
+      onValueChange={(value) =>
+        apply(value === UNCLASSIFIED_CASE_TYPE_VALUE ? null : (value as CaseType))
+      }
       disabled={setCaseType.isPending}
     >
       <SelectTrigger size="sm" className="w-[180px]">
         <SelectValue placeholder="Set case type" />
       </SelectTrigger>
       <SelectContent>
+        <SelectItem value={UNCLASSIFIED_CASE_TYPE_VALUE}>
+          {UNCLASSIFIED_LABEL}
+        </SelectItem>
         {CASE_TYPES.map((type) => (
           <SelectItem key={type} value={type}>
             {CASE_TYPE_LABELS[type]}

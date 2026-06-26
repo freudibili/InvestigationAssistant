@@ -27,6 +27,9 @@ export function useCaseAnalysis(
     queryFn: () =>
       fetchJson<CaseAnalysisResponse>(`/api/cases/${caseId}/analysis`),
     initialData,
+    staleTime: initialData?.status === "ready" ? Infinity : 0,
+    refetchOnMount: (query) => query.state.data?.status === "analyzing",
+    refetchOnWindowFocus: false,
     // Poll while the analysis is running so the dashboard appears on completion.
     refetchInterval: (query) =>
       query.state.data?.status === "analyzing" ? 2000 : false,
@@ -105,8 +108,10 @@ export function useAnalyzeCase(caseId: string) {
         }
       );
     },
-    onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.analysis(caseId) });
+    onSettled: (_data, error) => {
+      if (error) {
+        queryClient.invalidateQueries({ queryKey: queryKeys.analysis(caseId) });
+      }
     },
   });
 }
@@ -137,8 +142,10 @@ export function useCancelAnalysis(caseId: string) {
         })
       );
     },
-    onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.analysis(caseId) });
+    onSettled: (_data, error) => {
+      if (error) {
+        queryClient.invalidateQueries({ queryKey: queryKeys.analysis(caseId) });
+      }
     },
   });
 }

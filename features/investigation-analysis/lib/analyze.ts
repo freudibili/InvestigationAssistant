@@ -14,6 +14,7 @@ import { buildAggregate, type AggregateResult } from "@/features/investigation-a
 import { normalizeText } from "@/features/investigation-analysis/lib/catalog";
 import {
   findQuoteTextMatch,
+  quoteSupportsVisibleInlineFragment,
   removeUnsupportedInlineQuotes,
 } from "@/features/investigation-analysis/lib/quote-matching";
 import type { ReprocheStatement } from "@/features/investigation-analysis/types";
@@ -471,20 +472,27 @@ function sanitizeStatementQuotes(
     return { interviewId: null, summary: "", quoteIds: [] };
   }
 
-  const usableQuotes = uniqueIds(statement.quoteIds)
+  const sameInterviewQuotes = aggregate.quotes.filter(
+    (quote) => quote.documentId === statement.interviewId && isUsableQuote(quote)
+  );
+  const explicitQuotes = uniqueIds(statement.quoteIds)
     .map((quoteId) => aggregate.quoteById.get(quoteId))
     .filter(
       (quote): quote is AggregateResult["quotes"][number] =>
         Boolean(
           quote &&
             quote.documentId === statement.interviewId &&
-            quote.provenanceId &&
-            quote.page !== null &&
+            isUsableQuote(quote) &&
             findQuoteTextMatch(statement.summary, quote.text)
         )
-    )
-    .slice(0, limit);
-  const summary = removeUnsupportedInlineQuotes(statement.summary, usableQuotes);
+    );
+  const inlineQuotes = sameInterviewQuotes.filter((quote) =>
+    quoteSupportsVisibleInlineFragment(statement.summary, quote.text)
+  );
+  const supportedQuotes = uniqueQuotes([...inlineQuotes, ...explicitQuotes]);
+  const visibleQuoteCount = inlineQuotes.length;
+  const usableQuotes = supportedQuotes.slice(0, Math.max(limit, visibleQuoteCount));
+  const summary = removeUnsupportedInlineQuotes(statement.summary, supportedQuotes);
 
   return {
     ...statement,
@@ -499,4 +507,13 @@ function isUsableQuote(quote: AggregateResult["quotes"][number] | undefined): bo
 
 function uniqueIds(ids: string[]): string[] {
   return [...new Set(ids)];
+}
+
+function uniqueQuotes<TQuote extends { id: string }>(quotes: TQuote[]): TQuote[] {
+  const seen = new Set<string>();
+  return quotes.filter((quote) => {
+    if (seen.has(quote.id)) return false;
+    seen.add(quote.id);
+    return true;
+  });
 }

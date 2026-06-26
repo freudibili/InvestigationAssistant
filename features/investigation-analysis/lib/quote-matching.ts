@@ -59,13 +59,22 @@ export function removeUnsupportedInlineQuotes<TQuote extends MatchableQuote>(
     inlineQuotePattern,
     (match, curly: string | undefined, straight: string | undefined) => {
       const fragment = curly ?? straight ?? "";
-      const isSupported = quotes.some((quote) =>
-        quoteContainsFragment(quote.text, fragment)
-      );
+      const sourceFragment = findSupportedSourceFragment(quotes, fragment);
 
-      return isSupported ? match : fragment;
+      if (!sourceFragment) return fragment;
+
+      const openQuote = curly === undefined ? `"` : "“";
+      const closeQuote = curly === undefined ? `"` : "”";
+      return `${openQuote}${sourceFragment}${closeQuote}`;
     }
   );
+}
+
+export function quoteSupportsVisibleInlineFragment(
+  text: string,
+  quoteText: string
+): boolean {
+  return Boolean(findVisibleQuotedFragmentMatch(text, quoteText));
 }
 
 function findVisibleQuotedFragmentMatch(
@@ -77,6 +86,18 @@ function findVisibleQuotedFragmentMatch(
     if (!quoteContainsFragment(quoteText, fragment)) continue;
 
     return { index: match.index, endIndex: match.index + match[0].length };
+  }
+
+  return null;
+}
+
+function findSupportedSourceFragment<TQuote extends MatchableQuote>(
+  quotes: TQuote[],
+  fragment: string
+): string | null {
+  for (const quote of quotes) {
+    const sourceFragment = findSourceFragment(quote.text, fragment);
+    if (sourceFragment) return sourceFragment;
   }
 
   return null;
@@ -114,15 +135,25 @@ function matchQuoteTokens(text: string, tokens: string[]): TextMatch | null {
 }
 
 function quoteContainsFragment(quoteText: string, fragment: string): boolean {
-  const normalizedFragment = normalizeQuoteText(fragment);
-  return (
-    normalizedFragment.length > 0 &&
-    normalizeQuoteText(quoteText).includes(normalizedFragment)
-  );
+  return Boolean(findSourceFragment(quoteText, fragment));
 }
 
 function quoteTokens(text: string): string[] {
   return text.match(/[\p{L}\p{N}]+/gu) ?? [];
+}
+
+type QuoteToken = {
+  value: string;
+  index: number;
+  endIndex: number;
+};
+
+function quoteTokensWithPositions(text: string): QuoteToken[] {
+  return [...text.matchAll(/[\p{L}\p{N}]+/gu)].map((match) => ({
+    value: match[0].toLowerCase(),
+    index: match.index,
+    endIndex: match.index + match[0].length,
+  }));
 }
 
 function normalizeQuoteText(value: string): string {
@@ -133,4 +164,61 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-const inlineQuotePattern = /“([^”]{1,200})”|"([^"]{1,200})"/g;
+function findSourceFragment(
+  quoteText: string,
+  fragment: string
+): string | null {
+  const quoteWords = quoteTokensWithPositions(quoteText);
+  const fragmentWords = quoteTokens(fragment).map((token) => token.toLowerCase());
+  if (fragmentWords.length === 0 || fragmentWords.length > quoteWords.length) return null;
+
+  const allowedMismatches =
+    fragmentWords.length < 8 ? 0 : Math.max(1, Math.floor(fragmentWords.length * 0.08));
+  for (let start = 0; start <= quoteWords.length - fragmentWords.length; start += 1) {
+    let mismatches = 0;
+    for (let index = 0; index < fragmentWords.length; index += 1) {
+      if (areSimilarQuoteTokens(quoteWords[start + index].value, fragmentWords[index])) {
+        continue;
+      }
+
+      mismatches += 1;
+      if (mismatches > allowedMismatches) break;
+    }
+
+    if (mismatches <= allowedMismatches) {
+      const firstToken = quoteWords[start];
+      const lastToken = quoteWords[start + fragmentWords.length - 1];
+      return quoteText.slice(firstToken.index, lastToken.endIndex);
+    }
+  }
+
+  return null;
+}
+
+function areSimilarQuoteTokens(left: string, right: string): boolean {
+  if (left === right) return true;
+  if (Math.min(left.length, right.length) < 5) return false;
+  return levenshteinDistance(left, right) <= 1;
+}
+
+function levenshteinDistance(left: string, right: string): number {
+  const distances = Array.from({ length: right.length + 1 }, (_, index) => index);
+
+  for (let leftIndex = 1; leftIndex <= left.length; leftIndex += 1) {
+    let previous = distances[0];
+    distances[0] = leftIndex;
+
+    for (let rightIndex = 1; rightIndex <= right.length; rightIndex += 1) {
+      const current = distances[rightIndex];
+      distances[rightIndex] =
+        left[leftIndex - 1] === right[rightIndex - 1]
+          ? previous
+          : Math.min(previous, distances[rightIndex - 1], distances[rightIndex]) + 1;
+      previous = current;
+    }
+  }
+
+  return distances[right.length];
+}
+
+const inlineQuotePattern = /“([^”]{1,500})”|"([^"]{1,500})"/g;
