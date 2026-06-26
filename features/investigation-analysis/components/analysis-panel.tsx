@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -16,7 +17,6 @@ import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { useCase } from "@/hooks/use-case";
 import {
   useAnalyzeCase,
   useCancelAnalysis,
@@ -24,7 +24,7 @@ import {
   type CaseAnalysisResponse,
 } from "@/features/investigation-analysis/hooks/use-analysis";
 import { AnalysisDashboard } from "@/features/investigation-analysis/components/analysis-dashboard";
-import type { Case, CaseDocument } from "@/lib/types";
+import type { CaseDocument } from "@/lib/types";
 
 const analysisSteps = [
   {
@@ -56,23 +56,20 @@ const analysisSteps = [
  */
 export function AnalysisPanel({
   caseId,
-  initialCase,
   initialDocuments,
   initialAnalysis,
 }: {
   caseId: string;
-  initialCase: Case;
   initialDocuments: CaseDocument[];
   initialAnalysis: CaseAnalysisResponse;
 }) {
-  const { data: caseData } = useCase(caseId, {
-    case: initialCase,
-    documents: initialDocuments,
-  });
-  const documents = caseData?.documents ?? initialDocuments;
-  const extractedCount = documents.filter(
-    (document) => document.extractedData
-  ).length;
+  const extractedCount = useMemo(
+    () =>
+      initialDocuments.filter(
+        (document) => document.status === "extracted" || document.extractedData
+      ).length,
+    [initialDocuments]
+  );
 
   const { data } = useCaseAnalysis(caseId, initialAnalysis);
   const analyze = useAnalyzeCase(caseId);
@@ -202,15 +199,29 @@ export function AnalysisPanel({
       {visibleAnalysis ? (
         <AnalysisDashboard caseId={caseId} analysis={visibleAnalysis} />
       ) : isRunning ? (
-        <p className="text-muted-foreground rounded-lg border border-dashed p-8 text-center text-sm">
-          Analyzing interviews… this can take a moment.
-        </p>
+        <AnalysisLoadingPanel />
       ) : (
         <p className="text-muted-foreground rounded-lg border border-dashed p-8 text-center text-sm">
           No analysis yet. Run it to build the case-level dashboard.
         </p>
       )}
     </div>
+  );
+}
+
+function AnalysisLoadingPanel() {
+  return (
+    <section className="flex min-h-80 items-center justify-center rounded-lg border border-dashed bg-muted/20 p-8">
+      <div className="flex max-w-md flex-col items-center gap-3 text-center">
+        <Loader2 className="size-8 animate-spin text-primary" />
+        <div className="space-y-1">
+          <h3 className="text-sm font-medium">Analyzing interviews</h3>
+          <p className="text-muted-foreground text-sm leading-relaxed">
+            Building the investigation dashboard from the extracted case material.
+          </p>
+        </div>
+      </div>
+    </section>
   );
 }
 

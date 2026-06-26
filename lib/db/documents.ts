@@ -29,6 +29,38 @@ export async function listDocumentsForCase(
   return data.map(mapDocument);
 }
 
+export async function listDocumentSummariesForCase(
+  caseId: string
+): Promise<CaseDocument[]> {
+  const supabase = getSupabaseAdmin();
+  const { data, error } = await supabase
+    .from("documents")
+    .select(
+      "id, case_id, file_name, file_url, status, interviewee_role, extraction_current_step, extraction_total_steps, extraction_step, created_at, extracted_at"
+    )
+    .eq("case_id", caseId)
+    .order("created_at", { ascending: false });
+
+  if (error) throw new Error(error.message);
+
+  return data.map((row) => ({
+    id: row.id,
+    caseId: row.case_id,
+    fileName: row.file_name,
+    fileUrl: row.file_url,
+    status: row.status,
+    intervieweeRole: row.interviewee_role,
+    rawText: null,
+    extractedData: null,
+    extractionCurrentStep: row.extraction_current_step,
+    extractionTotalSteps: row.extraction_total_steps,
+    extractionStep: row.extraction_step,
+    hasResumableDrafts: false,
+    createdAt: row.created_at,
+    extractedAt: row.extracted_at,
+  }));
+}
+
 export async function getDocument(id: string): Promise<CaseDocument | null> {
   const supabase = getSupabaseAdmin();
   const { data, error } = await supabase

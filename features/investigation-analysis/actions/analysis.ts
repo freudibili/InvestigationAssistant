@@ -27,7 +27,6 @@ import type {
   ConductAssessment,
   InvestigationAnalysis,
 } from "@/features/investigation-analysis/validation";
-import type { Reproche } from "@/features/investigation-analysis/types";
 
 /**
  * Result of an analysis run. Like extraction, we *return* failures instead of
@@ -93,15 +92,23 @@ export async function analyzeCaseAction(
 
 export async function assessConductAction(
   caseId: string,
-  reproche: Reproche
+  reprocheId: string
 ): Promise<AssessConductResult> {
   try {
+    const { analysis: currentAnalysis } = await getCaseAnalysis(caseId);
+    const reproche = currentAnalysis?.reproches.find(
+      (item) => item.id === reprocheId
+    );
+    if (!reproche) {
+      return { ok: false, message: "Grievance not found in saved analysis." };
+    }
+
     const assessment = await assessReprocheConduct(reproche);
-    const analysis = await saveConductAssessment(caseId, reproche.id, assessment);
+    const analysis = await saveConductAssessment(caseId, reprocheId, assessment);
     revalidatePath(`/cases/${caseId}/analysis`);
     return { ok: true, assessment, analysis };
   } catch (error) {
-    logConductAssessmentFailure({ reprocheId: reproche.id, error });
+    logConductAssessmentFailure({ reprocheId, error });
     return { ok: false, message: toConductAssessmentUserMessage(error) };
   }
 }

@@ -29,6 +29,7 @@ import {
   SourceViewerProvider,
   useSourceViewer,
 } from "@/components/pdf/source-viewer-dialog";
+import { buildQuoteTextMatches } from "@/features/investigation-analysis/lib/quote-matching";
 import type { ConductAssessment } from "@/features/investigation-analysis/validation";
 import type {
   InvestigationAnalysis,
@@ -291,7 +292,7 @@ function ReprocheCard({
 
   function handleAssessConduct() {
     startTransition(async () => {
-      const result = await assessConductAction(caseId, reproche);
+      const result = await assessConductAction(caseId, reproche.id);
       if (!result.ok) {
         toast.error(result.message);
         return;
@@ -585,6 +586,24 @@ function InlineEvidenceText({
   const openViewer = useSourceViewer();
   const segments = buildInlineEvidenceSegments(text, quotes);
 
+  function openQuote(quote: QuoteRef) {
+    openViewer?.({
+      caseId,
+      documentId: quote.documentId,
+      documentName: quote.documentName,
+      label: `Page ${quote.page}`,
+      page: quote.page as number,
+      quoteId: quote.provenanceId ?? undefined,
+      charStart: quote.charStart,
+      charEnd: quote.charEnd,
+      pageCharStart: quote.pageCharStart,
+      pageCharEnd: quote.pageCharEnd,
+      normalizedPageCharStart: quote.normalizedPageCharStart,
+      normalizedPageCharEnd: quote.normalizedPageCharEnd,
+      quote: quote.text,
+    });
+  }
+
   return (
     <>
       {segments.map((segment, index) =>
@@ -594,26 +613,10 @@ function InlineEvidenceText({
           <button
             key={index}
             type="button"
-            onClick={() =>
-              openViewer?.({
-                caseId,
-                documentId: segment.quote.documentId,
-                documentName: segment.quote.documentName,
-                label: `Page ${segment.quote.page}`,
-                page: segment.quote.page as number,
-                quoteId: segment.quote.provenanceId ?? undefined,
-                charStart: segment.quote.charStart,
-                charEnd: segment.quote.charEnd,
-                pageCharStart: segment.quote.pageCharStart,
-                pageCharEnd: segment.quote.pageCharEnd,
-                normalizedPageCharStart: segment.quote.normalizedPageCharStart,
-                normalizedPageCharEnd: segment.quote.normalizedPageCharEnd,
-                quote: segment.quote.text,
-              })
-            }
-            className="rounded-sm bg-muted px-1 italic underline decoration-muted-foreground/50 underline-offset-2 hover:bg-muted/70 hover:decoration-foreground"
+            onClick={() => openQuote(segment.quote)}
+            className="rounded-sm border bg-muted px-1.5 font-medium italic text-foreground underline decoration-muted-foreground/70 underline-offset-2 transition-colors hover:bg-muted/70 hover:decoration-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1"
           >
-            “{segment.fragment}”
+            {segment.fragment}
           </button>
         )
       )}
@@ -632,46 +635,29 @@ function buildInlineEvidenceSegments(
   text: string,
   quotes: QuoteRef[]
 ): InlineEvidenceSegment[] {
+  const matches = buildQuoteTextMatches(text, quotes);
+  if (matches.length === 0) return [text];
+
   const segments: InlineEvidenceSegment[] = [];
-  const pattern = /“([^”]{1,120})”|"([^"]{1,120})"/g;
   let lastIndex = 0;
-  let match: RegExpExecArray | null;
 
-  while ((match = pattern.exec(text)) !== null) {
-    const fragment = match[1] ?? match[2] ?? "";
-    const quote = findQuoteForFragment(fragment, quotes);
-
+  for (const match of matches) {
     if (match.index > lastIndex) {
       segments.push(text.slice(lastIndex, match.index));
     }
 
-    segments.push(quote ? { fragment, quote } : fragment);
-    lastIndex = pattern.lastIndex;
+    segments.push({
+      fragment: text.slice(match.index, match.endIndex),
+      quote: match.quote,
+    });
+    lastIndex = match.endIndex;
   }
 
   if (lastIndex < text.length) {
     segments.push(text.slice(lastIndex));
   }
 
-  return segments.length > 0 ? segments : [text];
-}
-
-function findQuoteForFragment(
-  fragment: string,
-  quotes: QuoteRef[]
-): QuoteRef | null {
-  const normalizedFragment = normalizeInlineQuote(fragment);
-  if (normalizedFragment.length < 2) return null;
-
-  return (
-    quotes.find((quote) =>
-      normalizeInlineQuote(quote.text).includes(normalizedFragment)
-    ) ?? null
-  );
-}
-
-function normalizeInlineQuote(value: string): string {
-  return value.toLowerCase().replace(/\s+/g, " ").trim();
+  return segments;
 }
 
 function mainPartyLabel(party: Party): string {

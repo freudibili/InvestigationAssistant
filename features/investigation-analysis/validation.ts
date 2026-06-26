@@ -76,6 +76,37 @@ const verdictSchema = z
 
 const confidenceSchema = z.number().int().min(0).max(100).default(0);
 
+/**
+ * How a reproche is grounded in the case material. Only the first five values
+ * justify a standalone reproche; "context_only" material may inform findings but
+ * must never become its own allegation. Defaults to "context_only" so a reproche
+ * the model fails to ground is treated as ungrounded (and dropped) rather than
+ * silently promoted to a real allegation.
+ */
+export const reproachSourceBasisSchema = z
+  .enum([
+    "explicit_claimant_allegation",
+    "explicit_accused_response",
+    "explicit_reference_concern",
+    "documented_incident",
+    "source_grounded_pattern",
+    "context_only",
+  ])
+  .default("context_only");
+
+export type ReproachSourceBasis = z.infer<typeof reproachSourceBasisSchema>;
+
+/**
+ * Internal guard flagging how far a reproche's wording risks running ahead of
+ * its source. Defaults to "high" so an unassessed reproche is treated as the
+ * riskiest case until proven otherwise.
+ */
+export const amplificationRiskSchema = z
+  .enum(["low", "medium", "high"])
+  .default("high");
+
+export type AmplificationRisk = z.infer<typeof amplificationRiskSchema>;
+
 export const conductAssessmentCategorySchema = z.enum([
   "Mobbing",
   "Sexual harassment",
@@ -154,6 +185,20 @@ const aiReprocheSchema = z.object({
   id: z.string(),
   title: z.string(),
   grievanceType: grievanceTypeSchema,
+  /**
+   * Internal: which kind of source material grounds this reproche. Reproches
+   * tagged "context_only" are dropped during merge — they must not stand as
+   * their own allegation. Not rendered to investigators.
+   */
+  sourceBasis: reproachSourceBasisSchema,
+  sourceBasisInterviewIds: stringArray,
+  sourceBasisQuoteIds: stringArray,
+  sourceBasisEventIds: stringArray,
+  /**
+   * Internal: how far the title/summary risks overstating the source. Used to
+   * pressure the model toward cautious wording and merging; not rendered.
+   */
+  amplificationRisk: amplificationRiskSchema,
   description: z.string().default(""),
   claimantStatement: aiStatementSchema.default({
     interviewId: null,

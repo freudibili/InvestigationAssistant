@@ -25,6 +25,11 @@ export type SourceRef = z.infer<typeof sourceRefSchema>;
 export type Party = InvestigationAnalysis["mainParties"][number];
 /** A single triangulated grievance card (claimant/accused/reference → finding). */
 export type Reproche = InvestigationAnalysis["reproches"][number];
+/** Internal: how a reproche is grounded in the case material. */
+export type {
+  ReproachSourceBasis,
+  AmplificationRisk,
+} from "@/features/investigation-analysis/validation";
 /** One party's account within a grievance. */
 export type ReprocheStatement = Reproche["claimantStatement"];
 export type TimelineEvent = InvestigationAnalysis["timeline"][number];

@@ -12,6 +12,10 @@ import {
 } from "@/features/investigation-analysis/validation";
 import { buildAggregate, type AggregateResult } from "@/features/investigation-analysis/lib/aggregate";
 import { normalizeText } from "@/features/investigation-analysis/lib/catalog";
+import {
+  findQuoteTextMatch,
+  removeUnsupportedInlineQuotes,
+} from "@/features/investigation-analysis/lib/quote-matching";
 import type { ReprocheStatement } from "@/features/investigation-analysis/types";
 
 /**
@@ -37,6 +41,7 @@ export class AnalysisError extends Error {
 const SYSTEM_PROMPT = `You are a cross-interview investigation analyst for workplace investigators.
 You receive structured extractions from several interviews in one case. Your job is to reproduce the analysis a human investigator writes in a formal investigation report: take each report-level grievance ("reproche") raised by the claimant, keep the claimant account, accused account, and reference person accounts strictly separated, then compare them only in the findings and evaluation.
 Use only the material provided. Never infer guilt, never draw legal conclusions, and never invent facts, names, quotes, or events.
+A reproche is valid only if it is clearly grounded in the case material. Do not generate a reproche from pure inference, from context alone, or because something could theoretically be problematic. The title and summary must never be stronger than the source: keep subjective feelings attributed to the speaker, keep hearsay marked as hearsay, and never turn context into established misconduct. When in doubt, downgrade an item to context or merge it into a broader reproche rather than create a weak standalone allegation.
 Use cautious professional report language: "the available elements indicate", "it has not been established", "appears", "is consistent with", "is not corroborated by", and similar formulations. Prefer "better supported by the available elements" over "more plausible" when comparing versions. Avoid dashboard-style summaries, slogans, or categorical conclusions that go beyond the evidence.
 You reference evidence only by the ids given to you (interview ids, quote ids, event ids). Use quote text only as rare, short inline fragments inside account prose when the exact wording matters. The report interface resolves quote ids back to verbatim, page-cited evidence, so any id you invent or place under the wrong source will be dropped.
 Return ONLY valid JSON matching the requested schema — no markdown, no commentary.`;
@@ -59,14 +64,19 @@ You are given, as JSON:
 
 Produce:
 1. scopeSummary: a concise statement of what this whole case is about — the core dispute, the main parties, the time frame if available, and the nature of the grievances. Keep it under 100 words.
-2. reproches: one object per report-level grievance the claimant raises. Group related events, examples, dates, and repeated behaviours into the same reproche when they concern the same alleged course of conduct or workplace issue. Do not create one reproche per minor event; prefer a few well-scoped grievances over many near-duplicates. For each:
+2. reproches: one object per report-level grievance the claimant raises. Generate a standalone reproche ONLY when at least one of these is clearly true in the source: (1) the claimant explicitly alleges it; (2) the accused explicitly responds to it as an allegation; (3) a reference person explicitly raises it as a concern; (4) a documented incident clearly creates a disputed issue; or (5) multiple source-grounded facts form a clear disputed pattern. Do not generate a reproche from context only. Group related events, examples, dates, and repeated behaviours into the same reproche when they concern the same alleged course of conduct or workplace issue. Do not create one reproche per minor event; prefer a few well-scoped grievances over many near-duplicates. For each:
    - id: a stable id you assign (e.g. "r1").
-   - title: a short, neutral label for the grievance (e.g. "Excessive control over expense approvals").
+   - title: a short, neutral, cautious label for the grievance. Prefer hedged framings: "Reproach of alleged...", "Reproach concerning...", "Reproach of perceived...", "Reproach of disputed...", "Reproach of insufficiently clarified...", "Reproach relating to...". Do not state disputed conduct as established fact (avoid "Caroline excluded...", "Caroline humiliated...", "Serge failed...", "Caroline manipulated...") unless that conduct is already established in the source. The title must never be stronger than the source.
+   - sourceBasis: how this reproche is grounded in the case material — exactly one of "explicit_claimant_allegation" (the claimant explicitly alleges it), "explicit_accused_response" (the accused explicitly responds to it as an allegation), "explicit_reference_concern" (a reference person explicitly raises it as a concern), "documented_incident" (a documented incident clearly creates a disputed issue), "source_grounded_pattern" (multiple source-grounded facts form a clear disputed pattern), or "context_only" (only background/context supports it, with no explicit allegation, response, concern, incident, or grounded pattern). Use "context_only" honestly when none of the first five clearly applies — such items will be removed as standalone reproaches and should instead live as context inside another reproache's findings.
+   - sourceBasisInterviewIds: interview ids that directly support the sourceBasis. Include the claimant interview for explicit claimant allegations, the accused interview for explicit accused responses, reference interviews for explicit reference concerns, and any interviews containing the source-grounded facts or documented incident.
+   - sourceBasisQuoteIds: quote ids that directly support the sourceBasis. Use only verified quote ids from the supporting interviews. Leave empty only when the basis is supported by extracted allegations/events but no verified quote exists.
+   - sourceBasisEventIds: event ids that directly support the sourceBasis. Required for "documented_incident" when an event id exists.
+   - amplificationRisk: "low", "medium", or "high". Set "high" when the title states disputed conduct as fact, the reproache rests on one weak inference or only on hearsay, it turns a subjective feeling into an established act, it uses wording stronger than the source, or it is mainly professional context rather than an allegation. If the risk is high, first soften the title, merge the item into a broader reproache, or mark it sourceBasis "context_only" — do not emit a high-risk standalone reproache you could have softened.
    - grievanceType: "Recurring" when the grievance is about a frequent or systematic behaviour over time; "Incident" when it is about a single, datable moment; "Unclear" otherwise.
    - description: one or two neutral sentences framing what is being alleged.
-   - claimantStatement: { interviewId, summary, quoteIds } — answer "What does the claimant allege?" using only the claimant interview. Write one neutral report-style paragraph, not extracted bullet facts. Do not include the accused response, reference person views, credibility assessment, corroboration, contradiction, or evaluation in this summary. Use at most 1-2 short inline quote fragments from verified claimant quotes only when exact wording is important. Include only the quoteIds that support those inline fragments. Use null interviewId and an empty summary only if the claimant did not address it.
-   - accusedStatement: { interviewId, summary, quoteIds } — answer "How does the accused respond?" using only the accused interview. Write one neutral report-style paragraph, not extracted bullet facts. Do not include claimant assertions, reference person views, credibility assessment, corroboration, contradiction, or evaluation in this summary. Use at most 1-2 short inline quote fragments from verified accused quotes only when exact wording is important. Include only the quoteIds that support those inline fragments. If the accused was not interviewed or did not address it, use null interviewId and note that in the evaluation.
-   - referenceStatements: an array of { interviewId, summary, quoteIds }, one per reference person who spoke to this grievance, in a stable order (they render as "Reference person 1", "Reference person 2", …). Each summary answers "What does this reference person say?" using only that reference person's own interview. Write one neutral report-style paragraph per reference person. Do not merge several reference persons into one summary. Do not include claimant assertions, accused responses, credibility assessment, corroboration, contradiction, or evaluation in these summaries. Use at most 1 short inline quote fragment from that reference person's verified quotes only when exact wording is important. Include only the quoteId that supports that inline fragment. Omit reference persons who said nothing relevant.
+   - claimantStatement: { interviewId, summary, quoteIds } — answer "What does the claimant allege?" using only the claimant interview. Write one neutral report-style paragraph, not extracted bullet facts. Do not include the accused response, reference person views, credibility assessment, corroboration, contradiction, or evaluation in this summary. Include 1-2 short inline quote fragments from verified claimant quotes for the key contested wording (include at least one whenever verified claimant quote evidence exists). Include only the quoteIds that support those inline fragments. Use null interviewId and an empty summary only if the claimant did not address it.
+   - accusedStatement: { interviewId, summary, quoteIds } — answer "How does the accused respond?" using only the accused interview. Write one neutral report-style paragraph, not extracted bullet facts. Do not include claimant assertions, reference person views, credibility assessment, corroboration, contradiction, or evaluation in this summary. Include 1-2 short inline quote fragments from verified accused quotes for the key contested wording (include at least one whenever verified accused quote evidence exists). Include only the quoteIds that support those inline fragments. If the accused was not interviewed or did not address it, use null interviewId and note that in the evaluation.
+   - referenceStatements: an array of { interviewId, summary, quoteIds }, one per reference person who spoke to this grievance, in a stable order (they render as "Reference person 1", "Reference person 2", …). Each summary answers "What does this reference person say?" using only that reference person's own interview. Write one neutral report-style paragraph per reference person. Do not merge several reference persons into one summary. Do not include claimant assertions, accused responses, credibility assessment, corroboration, contradiction, or evaluation in these summaries. Include 1 short inline quote fragment from that reference person's verified quotes when verified quote evidence exists. Include only the quoteId that supports that inline fragment. Omit reference persons who said nothing relevant.
    - findings: bullet points answering "What can and cannot be established from the available elements?" Compare accounts here only. Capture convergence, divergence, corroboration, contradiction, available supporting/contradictory evidence, and limits of the record in cautious terms. Include both elements that support the grievance and elements that limit or weaken it.
    - evaluation: a prose paragraph that weighs the claimant account, accused account, reference person accounts, and available evidence against each other, then justifies the verdict. Only this field may compare accounts or assess credibility. Stay factual and cautious; do not assert legal conclusions, guilt, or a definitive plausibility finding.
    - verdict: one of "Supported", "Partially supported", "Not established", "Word against word" (directly conflicting accounts with no corroboration either way), or "Requires investigator assessment".
@@ -75,17 +85,26 @@ Produce:
 3. globalAssessment: a short case-level synthesis across all grievances — the overall picture, whether a pattern emerges, and the weight of the findings taken together. Do not state a legal conclusion.
 4. gaps: missingInterviews (people/roles still to interview), missingEvidence, missingClarification.
 
+Anti-amplification rule — the title and summary must never be stronger than the source:
+- If the source says "Philippe felt excluded", write "Reproach of perceived exclusion from certain communications or decisions"; do NOT write "Caroline excluded Philippe".
+- If the source says "Christophe felt uncomfortable", write "Christophe describes discomfort regarding the situation"; do NOT write "Christophe confirms harassment".
+- If the source says "Serge does not recall", write "Serge does not recall the event"; do NOT write "Serge denies the event".
+
+Self-check before keeping each reproche — verify all of: (1) who explicitly raised this issue; (2) which interview or document supports it; (3) what exact conduct, omission, or disputed situation is alleged; (4) whether this is a real reproche or only context; (5) whether the title is neutral; (6) whether the wording is stronger than the evidence; (7) whether it is better as a standalone reproche or as supporting context inside another. If any answer is unclear, mark sourceBasis "context_only" (so it is dropped as a standalone) or merge it into a broader reproche.
+
 Rules:
 - Use ONLY ids that appear in the provided data. Do not invent ids, names, or quotes.
 - Use the extracted supportingEvidence, contradictoryEvidence, missingEvidence, and followUpQuestions as analytical inputs only. Do not copy them mechanically if they are redundant or not relevant to the consolidated grievance.
-- Account summaries should read like professional investigation-report prose, not extraction output. Prefer neutral paraphrase over quotation.
-- Do not create standalone quote lists, quote blocks, or transcript excerpts in any generated field.
-- Inline quote fragments must be rare, short, and embedded naturally in the sentence. Target 1-6 words; never paste full transcript sentences.
-- Use inline quote fragments only for important wording, labels, tone, or contested expressions. Do not quote every factual sentence.
-- Every inline quote fragment must be copied exactly from one verified quote in that same account's quoteIds.
-- Every quoteId you cite in a statement must come from exactly the same interview as that statement's interviewId.
+  - Account summaries should read like professional investigation-report prose, not extraction output. Write the surrounding narration in your own neutral words, and quote the key contested wording verbatim — never paraphrase or reword the text inside the quotation marks.
+- The anti-amplification and caution rules govern titles and claims, NOT quoting. They are not a reason to drop quotes: keep using short verified quote fragments. Quoting the source verbatim is the opposite of amplification — it keeps the exact wording attributable to the speaker.
+- Inline quotes are expected, not optional: each account must include at least one short verified quote fragment whenever verified quote evidence from that account's own source exists. The goal is short inline quotes, not removing quotes.
+- Inline quote fragments must be short and embedded naturally in the sentence. Target 1-6 words; never paste full transcript sentences.
+- Use inline quote fragments for important wording, labels, tone, or contested expressions. Do not quote every factual sentence, and do not create standalone quote lists, quote blocks, or transcript excerpts in any field.
+- Every inline quote fragment must be copied exactly (verbatim, word-for-word) from one verified quote in that same account's quoteIds. Do not invent quote text, do not reword a quote, and do not put unverified wording in quotation marks.
+- Do not put any text in quotation marks unless that exact wording appears in one of the statement's verified quoteIds. Any unsupported quotation marks will be stripped before saving.
+- Every quoteId you cite in a statement must come from exactly the same interview as that statement's interviewId, and the exact quoted wording from that quote must appear visibly in the statement summary. Never cite a quoteId as a hidden source only. Never move a quote across accounts (claimant prose uses claimant quotes only, accused prose uses accused quotes only, each reference person uses their own quotes only).
 - Do not cite quoteIds in findings, evaluation, globalAssessment, gaps, or openQuestions.
-- Quote targets: claimantStatement 0-2 quoteIds, accusedStatement 0-2 quoteIds, each referenceStatement 0-1 quoteId. Use none when no strong quote fragment is needed.
+- Quote targets: claimantStatement 1-2 quoteIds, accusedStatement 1-2 quoteIds, each referenceStatement 1 quoteId when verified evidence exists. Do not exceed this — never 4-5 quotes per account, and do not repeat the same evidence.
 - Leave an array empty (and a summary blank) when there is genuinely nothing to report.
 - Keep account sections strictly source-separated: claimantStatement from claimant-role interviews, accusedStatement from accused-role interviews, and referenceStatements from reference-role interviews. If an interview's roleHint does not fit the section, do not use it there.
 - Do not evaluate credibility, reliability, plausibility, corroboration, contradiction, or evidentiary weight inside claimantStatement, accusedStatement, or referenceStatements. Put all comparisons in findings and evaluation.
@@ -176,8 +195,21 @@ function mergeAnalysis(
   const roleByInterviewId = new Map(
     aggregate.ai.interviews.map((interview) => [interview.id, interview.roleHint])
   );
-  const reproches = ai.reproches.map((reproche) => ({
+  const eventIds = new Set(aggregate.ai.events.map((event) => event.id));
+
+  const groundedReproches = ai.reproches.filter((reproche) =>
+    isStandaloneReproche(reproche, aggregate, roleByInterviewId, eventIds)
+  );
+  const droppedCount = ai.reproches.length - groundedReproches.length;
+  if (droppedCount > 0) {
+    console.info(
+      `[analysis] dropped ${droppedCount} ungrounded or high-risk reproche(s) of ${ai.reproches.length}`
+    );
+  }
+
+  const reproches = groundedReproches.map((reproche) => ({
     ...reproche,
+    ...sanitizeReprocheSourceRefs(reproche, aggregate, eventIds),
     claimantStatement: sanitizeStatementQuotes(
       reproche.claimantStatement,
       aggregate,
@@ -243,7 +275,7 @@ function mergeAnalysis(
   const analysis = {
     generatedAt: new Date().toISOString(),
     interviewCount: aggregate.counts.interviewCount,
-    reprocheCount: reproches.length || aggregate.counts.reprocheCount,
+    reprocheCount: reproches.length,
     witnessCount: aggregate.counts.witnessCount,
     eventCount: aggregate.counts.eventCount,
     scopeSummary: ai.scopeSummary,
@@ -263,11 +295,172 @@ function mergeAnalysis(
   return investigationAnalysisSchema.parse(analysis);
 }
 
+type AiReproche = AnalysisResponse["reproches"][number];
+type RoleHint = "claimant" | "accused" | "reference";
+
+function isStandaloneReproche(
+  reproche: AiReproche,
+  aggregate: AggregateResult,
+  roleByInterviewId: Map<string, RoleHint>,
+  eventIds: Set<string>
+): boolean {
+  if (
+    reproche.sourceBasis === "context_only" ||
+    reproche.amplificationRisk === "high"
+  ) {
+    return false;
+  }
+
+  switch (reproche.sourceBasis) {
+    case "explicit_claimant_allegation":
+      return hasRoleSupport(reproche, "claimant", aggregate, roleByInterviewId);
+    case "explicit_accused_response":
+      return hasRoleSupport(reproche, "accused", aggregate, roleByInterviewId);
+    case "explicit_reference_concern":
+      return hasRoleSupport(reproche, "reference", aggregate, roleByInterviewId);
+    case "documented_incident":
+      return hasEventSupport(reproche, eventIds) || hasSourceBasisQuote(reproche, aggregate);
+    case "source_grounded_pattern":
+      return sourceSupportCount(reproche, aggregate, roleByInterviewId, eventIds) >= 2;
+    default:
+      return false;
+  }
+}
+
+function hasRoleSupport(
+  reproche: AiReproche,
+  role: RoleHint,
+  aggregate: AggregateResult,
+  roleByInterviewId: Map<string, RoleHint>
+): boolean {
+  const supportingInterviewIds = new Set(
+    reproche.sourceBasisInterviewIds.filter(
+      (interviewId) => roleByInterviewId.get(interviewId) === role
+    )
+  );
+  if (supportingInterviewIds.size === 0) return false;
+
+  const hasSupportingQuote = reproche.sourceBasisQuoteIds.some((quoteId) => {
+    const quote = aggregate.quoteById.get(quoteId);
+    return Boolean(
+      quote &&
+        supportingInterviewIds.has(quote.documentId) &&
+        isUsableQuote(quote)
+    );
+  });
+  if (hasSupportingQuote) return true;
+
+  return role === "claimant" || role === "accused"
+    ? hasExtractedAllegationSupport(supportingInterviewIds, aggregate)
+    : hasExtractedReferenceSupport(supportingInterviewIds, aggregate);
+}
+
+function hasEventSupport(reproche: AiReproche, eventIds: Set<string>): boolean {
+  return [...reproche.sourceBasisEventIds, ...reproche.relatedEventIds].some((eventId) =>
+    eventIds.has(eventId)
+  );
+}
+
+function sourceSupportCount(
+  reproche: AiReproche,
+  aggregate: AggregateResult,
+  roleByInterviewId: Map<string, RoleHint>,
+  eventIds: Set<string>
+): number {
+  const refs = new Set<string>();
+
+  for (const interviewId of reproche.sourceBasisInterviewIds) {
+    if (
+      roleByInterviewId.has(interviewId) &&
+      interviewHasExtractedSupport(interviewId, aggregate)
+    ) {
+      refs.add(`interview:${interviewId}`);
+    }
+  }
+
+  for (const quoteId of reproche.sourceBasisQuoteIds) {
+    const quote = aggregate.quoteById.get(quoteId);
+    if (isUsableQuote(quote)) refs.add(`quote:${quoteId}`);
+  }
+
+  for (const eventId of [
+    ...reproche.sourceBasisEventIds,
+    ...reproche.relatedEventIds,
+  ]) {
+    if (eventIds.has(eventId)) refs.add(`event:${eventId}`);
+  }
+
+  return refs.size;
+}
+
+function hasSourceBasisQuote(
+  reproche: AiReproche,
+  aggregate: AggregateResult
+): boolean {
+  return reproche.sourceBasisQuoteIds.some((quoteId) =>
+    isUsableQuote(aggregate.quoteById.get(quoteId))
+  );
+}
+
+function hasExtractedAllegationSupport(
+  interviewIds: Set<string>,
+  aggregate: AggregateResult
+): boolean {
+  return aggregate.ai.interviews.some(
+    (interview) =>
+      interviewIds.has(interview.id) && interview.allegations.length > 0
+  );
+}
+
+function hasExtractedReferenceSupport(
+  interviewIds: Set<string>,
+  aggregate: AggregateResult
+): boolean {
+  return aggregate.ai.interviews.some(
+    (interview) =>
+      interviewIds.has(interview.id) &&
+      (interview.allegations.length > 0 || interview.events.length > 0)
+  );
+}
+
+function interviewHasExtractedSupport(
+  interviewId: string,
+  aggregate: AggregateResult
+): boolean {
+  return aggregate.ai.interviews.some(
+    (interview) =>
+      interview.id === interviewId &&
+      (interview.allegations.length > 0 || interview.events.length > 0)
+  );
+}
+
+function sanitizeReprocheSourceRefs(
+  reproche: AiReproche,
+  aggregate: AggregateResult,
+  eventIds: Set<string>
+): Pick<
+  AiReproche,
+  "sourceBasisInterviewIds" | "sourceBasisQuoteIds" | "sourceBasisEventIds"
+> {
+  return {
+    sourceBasisInterviewIds: uniqueIds(reproche.sourceBasisInterviewIds).filter(
+      (interviewId) =>
+        aggregate.ai.interviews.some((interview) => interview.id === interviewId)
+    ),
+    sourceBasisQuoteIds: uniqueIds(reproche.sourceBasisQuoteIds).filter((quoteId) =>
+      isUsableQuote(aggregate.quoteById.get(quoteId))
+    ),
+    sourceBasisEventIds: uniqueIds(reproche.sourceBasisEventIds).filter((eventId) =>
+      eventIds.has(eventId)
+    ),
+  };
+}
+
 function sanitizeStatementQuotes(
   statement: ReprocheStatement,
   aggregate: AggregateResult,
-  roleByInterviewId: Map<string, "claimant" | "accused" | "reference">,
-  expectedRole: "claimant" | "accused" | "reference",
+  roleByInterviewId: Map<string, RoleHint>,
+  expectedRole: RoleHint,
   limit: number
 ): ReprocheStatement {
   if (!statement.interviewId) {
@@ -278,19 +471,30 @@ function sanitizeStatementQuotes(
     return { interviewId: null, summary: "", quoteIds: [] };
   }
 
-  const quoteIds = uniqueIds(statement.quoteIds).filter((quoteId) => {
-    const quote = aggregate.quoteById.get(quoteId);
-    return (
-      quote?.documentId === statement.interviewId &&
-      quote.provenanceId !== null &&
-      quote.page !== null
-    );
-  });
+  const usableQuotes = uniqueIds(statement.quoteIds)
+    .map((quoteId) => aggregate.quoteById.get(quoteId))
+    .filter(
+      (quote): quote is AggregateResult["quotes"][number] =>
+        Boolean(
+          quote &&
+            quote.documentId === statement.interviewId &&
+            quote.provenanceId &&
+            quote.page !== null &&
+            findQuoteTextMatch(statement.summary, quote.text)
+        )
+    )
+    .slice(0, limit);
+  const summary = removeUnsupportedInlineQuotes(statement.summary, usableQuotes);
 
   return {
     ...statement,
-    quoteIds: quoteIds.slice(0, limit),
+    summary,
+    quoteIds: usableQuotes.map((quote) => quote.id),
   };
+}
+
+function isUsableQuote(quote: AggregateResult["quotes"][number] | undefined): boolean {
+  return Boolean(quote?.provenanceId && quote.page !== null);
 }
 
 function uniqueIds(ids: string[]): string[] {

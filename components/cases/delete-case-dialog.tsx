@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Trash2 } from "lucide-react";
+import { AlertTriangle, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -55,10 +55,13 @@ export function DeleteCaseDialog({
         <DialogHeader>
           <DialogTitle>Delete this case?</DialogTitle>
           <DialogDescription>
-            This will permanently delete <span>{caseTitle}</span> and all
-            documents in the case.
+            {`"${caseTitle}" and all documents in the case will be permanently deleted.`}
           </DialogDescription>
         </DialogHeader>
+        <div className="border-destructive/30 bg-destructive/10 text-destructive flex gap-3 rounded-md border p-3 text-sm">
+          <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+          <p>This cannot be undone.</p>
+        </div>
         <DialogFooter>
           <DialogClose asChild>
             <Button variant="outline" disabled={deleteCase.isPending}>

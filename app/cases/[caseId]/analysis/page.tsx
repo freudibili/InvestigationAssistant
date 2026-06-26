@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 
 import { getCase } from "@/lib/db/cases";
-import { listDocumentsForCase } from "@/lib/db/documents";
+import { listDocumentSummariesForCase } from "@/lib/db/documents";
 import { getCaseAnalysis } from "@/features/investigation-analysis/lib/db";
 import { AnalysisPanel } from "@/features/investigation-analysis/components/analysis-panel";
 
@@ -17,14 +17,13 @@ export default async function CaseAnalysisPage({
   if (!investigationCase) notFound();
 
   const [documents, analysis] = await Promise.all([
-    listDocumentsForCase(caseId),
+    listDocumentSummariesForCase(caseId),
     getCaseAnalysis(caseId),
   ]);
 
   return (
     <AnalysisPanel
       caseId={caseId}
-      initialCase={investigationCase}
       initialDocuments={documents}
       initialAnalysis={analysis}
     />
