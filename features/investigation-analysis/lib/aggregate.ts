@@ -39,6 +39,10 @@ export interface AiInterview {
     claimant: string | null;
     subject: string | null;
     classification: string;
+    supportingEvidence: string[];
+    contradictoryEvidence: string[];
+    missingEvidence: string[];
+    followUpQuestions: string[];
   }[];
   events: { id: string; date: string | null; description: string }[];
   witnesses: string[];
@@ -215,6 +219,14 @@ export function buildAggregate(documents: CaseDocument[]): AggregateResult {
         claimant: a.claimant ?? null,
         subject: a.subject ?? null,
         classification: a.classification,
+        supportingEvidence: a.supportingEvidence.map(
+          (item) => item.description
+        ),
+        contradictoryEvidence: a.contradictoryEvidence.map(
+          (item) => item.description
+        ),
+        missingEvidence: a.missingEvidence,
+        followUpQuestions: a.followUpQuestions,
       })),
       events: (data.keyEvents ?? []).map((event, eventIndex) => ({
         id: `e${docIndex}_${eventIndex}`,

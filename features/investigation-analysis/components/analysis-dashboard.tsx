@@ -1,23 +1,35 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo } from "react";
+import { useMemo, useState, useTransition } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   ArrowRight,
   CalendarClock,
   FileText,
   Gavel,
   HelpCircle,
+  Loader2,
+  RotateCcw,
+  Sparkles,
   Users,
 } from "lucide-react";
+import { toast } from "sonner";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { queryKeys } from "@/lib/query-keys";
+import {
+  assessConductAction,
+  assessOverallConductAction,
+} from "@/features/investigation-analysis/actions/analysis";
+import type { CaseAnalysisResponse } from "@/features/investigation-analysis/hooks/use-analysis";
 import {
   SourceViewerProvider,
   useSourceViewer,
 } from "@/components/pdf/source-viewer-dialog";
+import type { ConductAssessment } from "@/features/investigation-analysis/validation";
 import type {
   InvestigationAnalysis,
   Party,
@@ -38,6 +50,13 @@ const MAIN_PARTY_ROLE_LABELS: Record<Party["caseRole"], string> = {
   witness: "Witness",
   investigator: "Investigator",
 };
+
+const CONDUCT_CATEGORY_LABELS = [
+  "Mobbing",
+  "Sexual harassment",
+  "Violence",
+  "Racism",
+];
 
 function verdictVariant(
   verdict: string
@@ -130,13 +149,7 @@ function DashboardBody({
 
       {analysis.globalAssessment ? (
         <Section icon={FileText} title="Overall assessment">
-          <Card>
-            <CardContent className="pt-6">
-              <p className="text-sm leading-relaxed whitespace-pre-line">
-                {analysis.globalAssessment}
-              </p>
-            </CardContent>
-          </Card>
+          <OverallAssessmentCard caseId={caseId} analysis={analysis} />
         </Section>
       ) : null}
 
@@ -181,6 +194,86 @@ function DashboardBody({
   );
 }
 
+function OverallAssessmentCard({
+  caseId,
+  analysis,
+}: {
+  caseId: string;
+  analysis: InvestigationAnalysis;
+}) {
+  const [isPending, startTransition] = useTransition();
+  const queryClient = useQueryClient();
+  const assessedCount = analysis.reproches.filter(
+    (reproche) => reproche.conductAssessment
+  ).length;
+  const canCalculate =
+    analysis.reproches.length > 0 && assessedCount === analysis.reproches.length;
+  const assessment = analysis.overallConductAssessment;
+
+  function handleAssessOverallConduct() {
+    startTransition(async () => {
+      const result = await assessOverallConductAction(caseId);
+      if (!result.ok) {
+        toast.error(result.message);
+        return;
+      }
+
+      queryClient.setQueryData<CaseAnalysisResponse>(
+        queryKeys.analysis(caseId),
+        (current) => ({
+          status: current?.status ?? "ready",
+          generatedAt: current?.generatedAt ?? result.analysis.generatedAt,
+          analysis: result.analysis,
+        })
+      );
+    });
+  }
+
+  return (
+    <Card>
+      <CardContent className="space-y-4 pt-6">
+        <p className="text-sm leading-relaxed whitespace-pre-line">
+          {analysis.globalAssessment}
+        </p>
+        <div className="space-y-3">
+          {assessment ? (
+            <ConductAssessmentPanel
+              assessment={assessment}
+              isPending={isPending}
+              onReassess={handleAssessOverallConduct}
+            />
+          ) : (
+            <Button
+              type="button"
+              size="sm"
+              onClick={handleAssessOverallConduct}
+              disabled={!canCalculate || isPending}
+              title={
+                canCalculate
+                  ? undefined
+                  : `Run conduct assessment for all grievances first (${assessedCount}/${analysis.reproches.length}).`
+              }
+            >
+              {isPending ? (
+                <Loader2 className="animate-spin" />
+              ) : (
+                <Sparkles />
+              )}
+              {isPending ? "Calculating..." : "Calculate global result"}
+            </Button>
+          )}
+          {!canCalculate ? (
+            <p className="text-muted-foreground text-xs">
+              Conduct assessments completed: {assessedCount}/
+              {analysis.reproches.length}
+            </p>
+          ) : null}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 function ReprocheCard({
   caseId,
   reproche,
@@ -190,17 +283,42 @@ function ReprocheCard({
   reproche: Reproche;
   lookups: Lookups;
 }) {
+  const [assessment, setAssessment] = useState<ConductAssessment | null>(
+    reproche.conductAssessment
+  );
+  const [isPending, startTransition] = useTransition();
+  const queryClient = useQueryClient();
+
+  function handleAssessConduct() {
+    startTransition(async () => {
+      const result = await assessConductAction(caseId, reproche);
+      if (!result.ok) {
+        toast.error(result.message);
+        return;
+      }
+      setAssessment(result.assessment);
+      queryClient.setQueryData<CaseAnalysisResponse>(
+        queryKeys.analysis(caseId),
+        (current) => ({
+          status: current?.status ?? "ready",
+          generatedAt: current?.generatedAt ?? result.analysis.generatedAt,
+          analysis: result.analysis,
+        })
+      );
+    });
+  }
+
   return (
     <Card>
       <CardHeader>
         <div className="flex flex-wrap items-start justify-between gap-2">
           <CardTitle className="text-base">{reproche.title}</CardTitle>
-          <Badge variant={verdictVariant(reproche.verdict)}>
-            {reproche.verdict}
-          </Badge>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Badge variant="outline">{reproche.grievanceType}</Badge>
+          <div className="flex flex-wrap justify-end gap-2">
+            <Badge variant={verdictVariant(reproche.verdict)}>
+              {reproche.verdict}
+            </Badge>
+            <Badge variant="outline">{reproche.grievanceType}</Badge>
+          </div>
         </div>
         {reproche.description ? (
           <p className="text-muted-foreground text-sm">{reproche.description}</p>
@@ -249,12 +367,162 @@ function ReprocheCard({
           ) : null}
         </div>
 
+        <div className="space-y-3">
+          {assessment ? (
+            <ConductAssessmentPanel
+              assessment={assessment}
+              isPending={isPending}
+              onReassess={handleAssessConduct}
+            />
+          ) : (
+            <Button
+              type="button"
+              size="sm"
+              onClick={handleAssessConduct}
+              disabled={isPending}
+            >
+              {isPending ? (
+                <Loader2 className="animate-spin" />
+              ) : (
+                <Sparkles />
+              )}
+              {isPending ? "Analysing..." : "Analyse conduct"}
+            </Button>
+          )}
+        </div>
+
         {reproche.openQuestions.length > 0 ? (
           <BulletList label="Open questions" items={reproche.openQuestions} />
         ) : null}
       </CardContent>
     </Card>
   );
+}
+
+function ConductAssessmentPanel({
+  assessment,
+  isPending,
+  onReassess,
+}: {
+  assessment: ConductAssessment;
+  isPending: boolean;
+  onReassess: () => void;
+}) {
+  const categories = CONDUCT_CATEGORY_LABELS.map((label) =>
+    assessment.categories.find((item) => item.category === label)
+  ).filter((item): item is ConductAssessment["categories"][number] =>
+    Boolean(item && item.confidence > 0)
+  );
+  const missingInformation = uniqueStrings([
+    ...assessment.missingInformation,
+    ...categories.flatMap((item) => item.missingInformation),
+  ]);
+
+  return (
+    <div className="space-y-3 rounded-md border bg-background p-3">
+      {assessment.overallCaution ? (
+        <p className="text-sm leading-relaxed">{assessment.overallCaution}</p>
+      ) : null}
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          onClick={onReassess}
+          disabled={isPending}
+        >
+          {isPending ? (
+            <Loader2 className="animate-spin" />
+          ) : (
+            <RotateCcw />
+          )}
+          {isPending ? "Re-analysing..." : "Re-analyse"}
+        </Button>
+        {categories.map((item) => (
+          <Badge key={item.category} variant={conductStatusVariant(item.status)}>
+            {item.category}: {item.status} ({item.confidence}%)
+          </Badge>
+        ))}
+      </div>
+      <MobbingFactorAssessment assessment={assessment} />
+      <div className="space-y-2">
+        {categories.map((item) => (
+          <div key={item.category} className="space-y-1">
+            <div className="flex flex-wrap items-baseline gap-2">
+              <p className="text-sm font-medium">{item.category}</p>
+              <p className="text-muted-foreground text-xs">
+                Confidence: {item.confidence}%
+              </p>
+            </div>
+            {item.rationale ? (
+              <p className="text-sm leading-relaxed">{item.rationale}</p>
+            ) : null}
+          </div>
+        ))}
+      </div>
+      {missingInformation.length > 0 ? (
+        <p className="text-muted-foreground border-t pt-2 text-xs">
+          Missing elements: {missingInformation.join("; ")}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function MobbingFactorAssessment({
+  assessment,
+}: {
+  assessment: ConductAssessment;
+}) {
+  const factors = assessment.mobbingFactorAssessments.filter(
+    (item) => item.confidence > 0
+  );
+
+  if (factors.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="space-y-2 rounded-md border p-3">
+      <p className="text-muted-foreground text-xs font-medium uppercase tracking-wide">
+        Assessment dimensions
+      </p>
+      <div className="space-y-2">
+        {factors.map((item) => (
+          <div key={item.factor} className="space-y-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant="outline">{item.factor}</Badge>
+              <span className="text-muted-foreground text-xs">
+                {item.confidence}% confidence
+              </span>
+            </div>
+            {item.rationale ? (
+              <p className="text-sm leading-relaxed">{item.rationale}</p>
+            ) : null}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function uniqueStrings(items: string[]): string[] {
+  return [...new Set(items.map((item) => item.trim()).filter(Boolean))];
+}
+
+function conductStatusVariant(
+  status: string
+): "default" | "secondary" | "outline" | "destructive" | "success" | "warning" {
+  switch (status) {
+    case "Likely indicated":
+      return "destructive";
+    case "Possible":
+      return "warning";
+    case "Not indicated":
+      return "outline";
+    default:
+      return "secondary";
+  }
 }
 
 function StatementBlock({

@@ -74,6 +74,59 @@ const verdictSchema = z
   ])
   .default("Requires investigator assessment");
 
+const confidenceSchema = z.number().int().min(0).max(100).default(0);
+
+export const conductAssessmentCategorySchema = z.enum([
+  "Mobbing",
+  "Sexual harassment",
+  "Violence",
+  "Racism",
+]);
+
+export const conductAssessmentStatusSchema = z.enum([
+  "Likely indicated",
+  "Possible",
+  "Not indicated",
+  "Insufficient information",
+]);
+
+export const mobbingFactorSchema = z.enum([
+  "Expression and communication",
+  "Social relations",
+  "Professional reputation",
+  "Working conditions",
+  "Health",
+]);
+
+export const conductAssessmentSchema = z.object({
+  categories: z
+    .array(
+      z.object({
+        category: conductAssessmentCategorySchema,
+        status: conductAssessmentStatusSchema,
+        confidence: confidenceSchema,
+        rationale: z.string().default(""),
+        supportingFactors: z.array(z.string()).default([]),
+        missingInformation: z.array(z.string()).default([]),
+      })
+    )
+    .default([]),
+  mobbingFactors: z.array(mobbingFactorSchema).default([]),
+  mobbingFactorAssessments: z
+    .array(
+      z.object({
+        factor: mobbingFactorSchema,
+        confidence: confidenceSchema,
+        rationale: z.string().default(""),
+      })
+    )
+    .default([]),
+  missingInformation: z.array(z.string()).default([]),
+  overallCaution: z.string().default(""),
+});
+
+export type ConductAssessment = z.infer<typeof conductAssessmentSchema>;
+
 // ---------------------------------------------------------------------------
 // AI response (reasoning sections only; references by id)
 // ---------------------------------------------------------------------------
@@ -121,6 +174,7 @@ const aiReprocheSchema = z.object({
   verdict: verdictSchema,
   openQuestions: stringArray,
   relatedEventIds: stringArray,
+  conductAssessment: conductAssessmentSchema.nullable().default(null),
 });
 
 const aiGapsSchema = z.object({
@@ -199,6 +253,7 @@ export const investigationAnalysisSchema = z.object({
   eventCount: z.number().int().nonnegative().default(0),
   scopeSummary: z.string().default(""),
   globalAssessment: z.string().default(""),
+  overallConductAssessment: conductAssessmentSchema.nullable().default(null),
   interviews: z.array(interviewRefSchema).default([]),
   quotes: z.array(quoteRefSchema).default([]),
   mainParties: z.array(partySchema).default([]),

@@ -6,8 +6,11 @@ import { listDocumentsForCase } from "@/lib/db/documents";
 import {
   assertAnalysisIsActive,
   cancelAnalysis,
+  getCaseAnalysis,
   getCaseAnalysisState,
   saveAnalysis,
+  saveConductAssessment,
+  saveOverallConductAssessment,
   setAnalysisFailed,
   startAnalysis,
 } from "@/features/investigation-analysis/lib/db";
@@ -15,7 +18,16 @@ import {
   AnalysisError,
   generateCaseAnalysis,
 } from "@/features/investigation-analysis/lib/analyze";
-import type { InvestigationAnalysis } from "@/features/investigation-analysis/validation";
+import {
+  assessGlobalConduct,
+  assessReprocheConduct,
+  ConductAssessmentError,
+} from "@/features/investigation-analysis/lib/conduct-assessment";
+import type {
+  ConductAssessment,
+  InvestigationAnalysis,
+} from "@/features/investigation-analysis/validation";
+import type { Reproche } from "@/features/investigation-analysis/types";
 
 /**
  * Result of an analysis run. Like extraction, we *return* failures instead of
@@ -25,6 +37,10 @@ import type { InvestigationAnalysis } from "@/features/investigation-analysis/va
 export type AnalyzeCaseResult =
   | { ok: true; analysis: InvestigationAnalysis }
   | { ok: false; canceled: boolean; message: string };
+
+export type AssessConductResult =
+  | { ok: true; assessment: ConductAssessment; analysis: InvestigationAnalysis }
+  | { ok: false; message: string };
 
 export async function cancelAnalysisAction(caseId: string) {
   const state = await cancelAnalysis(caseId);
@@ -75,6 +91,47 @@ export async function analyzeCaseAction(
   }
 }
 
+export async function assessConductAction(
+  caseId: string,
+  reproche: Reproche
+): Promise<AssessConductResult> {
+  try {
+    const assessment = await assessReprocheConduct(reproche);
+    const analysis = await saveConductAssessment(caseId, reproche.id, assessment);
+    revalidatePath(`/cases/${caseId}/analysis`);
+    return { ok: true, assessment, analysis };
+  } catch (error) {
+    logConductAssessmentFailure({ reprocheId: reproche.id, error });
+    return { ok: false, message: toConductAssessmentUserMessage(error) };
+  }
+}
+
+export async function assessOverallConductAction(
+  caseId: string
+): Promise<AssessConductResult> {
+  try {
+    const { analysis } = await getCaseAnalysis(caseId);
+    if (!analysis) {
+      return { ok: false, message: "No saved analysis found for this case." };
+    }
+    if (analysis.reproches.some((reproche) => !reproche.conductAssessment)) {
+      return {
+        ok: false,
+        message:
+          "Run the conduct assessment for every grievance before calculating the global result.",
+      };
+    }
+
+    const assessment = await assessGlobalConduct(analysis);
+    const savedAnalysis = await saveOverallConductAssessment(caseId, assessment);
+    revalidatePath(`/cases/${caseId}/analysis`);
+    return { ok: true, assessment, analysis: savedAnalysis };
+  } catch (error) {
+    logConductAssessmentFailure({ reprocheId: "overall", error });
+    return { ok: false, message: toConductAssessmentUserMessage(error) };
+  }
+}
+
 function isCanceledAnalysis(error: unknown): error is Error {
   return error instanceof Error && /canceled|superseded/i.test(error.message);
 }
@@ -95,6 +152,33 @@ function logAnalysisFailure(params: {
   if (error instanceof AnalysisError) {
     console.error(
       `${prefix} type=AnalysisError message="${error.message}"` +
+        (error.detail ? ` detail=${error.detail}` : "")
+    );
+    if (error.cause) console.error(`${prefix} cause:`, error.cause);
+    return;
+  }
+  if (error instanceof Error) {
+    console.error(`${prefix} type=${error.name} message="${error.message}"`, error);
+    return;
+  }
+  console.error(`${prefix} non-error thrown:`, error);
+}
+
+function toConductAssessmentUserMessage(error: unknown): string {
+  if (error instanceof ConductAssessmentError) return error.userMessage;
+  return "Conduct assessment failed. Please try again.";
+}
+
+function logConductAssessmentFailure(params: {
+  reprocheId: string;
+  error: unknown;
+}): void {
+  const { reprocheId, error } = params;
+  const prefix = `[conduct-assessment] failed reprocheId=${reprocheId}`;
+
+  if (error instanceof ConductAssessmentError) {
+    console.error(
+      `${prefix} type=ConductAssessmentError message="${error.message}"` +
         (error.detail ? ` detail=${error.detail}` : "")
     );
     if (error.cause) console.error(`${prefix} cause:`, error.cause);

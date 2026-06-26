@@ -2,7 +2,9 @@ import "server-only";
 
 import { getSupabaseAdmin } from "@/lib/supabase/admin";
 import {
+  conductAssessmentSchema,
   investigationAnalysisSchema,
+  type ConductAssessment,
   type InvestigationAnalysis,
 } from "@/features/investigation-analysis/validation";
 import type { AnalysisStatus } from "@/lib/types";
@@ -149,6 +151,78 @@ export async function saveAnalysis(
 
   if (error) throw new Error(error.message);
   if (!data) throw new Error("Analysis is no longer active.");
+}
+
+export async function saveConductAssessment(
+  caseId: string,
+  reprocheId: string,
+  assessment: ConductAssessment
+): Promise<InvestigationAnalysis> {
+  const current = await getCaseAnalysis(caseId);
+
+  if (!current.analysis) {
+    throw new Error("No saved analysis found for this case.");
+  }
+
+  let didUpdate = false;
+  const nextAnalysis = investigationAnalysisSchema.parse({
+    ...current.analysis,
+    overallConductAssessment: null,
+    reproches: current.analysis.reproches.map((reproche) => {
+      if (reproche.id !== reprocheId) return reproche;
+      didUpdate = true;
+      return {
+        ...reproche,
+        conductAssessment: conductAssessmentSchema.parse(assessment),
+      };
+    }),
+  });
+
+  if (!didUpdate) {
+    throw new Error("Grievance not found in saved analysis.");
+  }
+
+  const supabase = getSupabaseAdmin();
+  const { error } = await supabase
+    .from("cases")
+    .update({
+      investigation_analysis: nextAnalysis,
+      investigation_analysis_at: new Date().toISOString(),
+    })
+    .eq("id", caseId);
+
+  if (error) throw new Error(error.message);
+
+  return nextAnalysis;
+}
+
+export async function saveOverallConductAssessment(
+  caseId: string,
+  assessment: ConductAssessment
+): Promise<InvestigationAnalysis> {
+  const current = await getCaseAnalysis(caseId);
+
+  if (!current.analysis) {
+    throw new Error("No saved analysis found for this case.");
+  }
+
+  const nextAnalysis = investigationAnalysisSchema.parse({
+    ...current.analysis,
+    overallConductAssessment: conductAssessmentSchema.parse(assessment),
+  });
+
+  const supabase = getSupabaseAdmin();
+  const { error } = await supabase
+    .from("cases")
+    .update({
+      investigation_analysis: nextAnalysis,
+      investigation_analysis_at: new Date().toISOString(),
+    })
+    .eq("id", caseId);
+
+  if (error) throw new Error(error.message);
+
+  return nextAnalysis;
 }
 
 /** Mark the active run as failed (guarded so it never overrides a newer run). */
