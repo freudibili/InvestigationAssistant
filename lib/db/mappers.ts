@@ -24,6 +24,7 @@ export function mapDocument(row: DocumentRow): CaseDocument {
     fileName: row.file_name,
     fileUrl: row.file_url,
     status: row.status,
+    intervieweeRole: row.interviewee_role,
     rawText: row.raw_text,
     extractedData: row.extracted_data,
     extractionCurrentStep: row.extraction_current_step,

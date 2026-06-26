@@ -23,9 +23,10 @@ export type InterviewRef = z.infer<typeof interviewRefSchema>;
 export type SourceRef = z.infer<typeof sourceRefSchema>;
 
 export type Party = InvestigationAnalysis["mainParties"][number];
-export type MergedAllegation = InvestigationAnalysis["allegations"][number];
-export type MobbingPattern = InvestigationAnalysis["mobbingPatterns"][number];
-export type Contradiction = InvestigationAnalysis["contradictions"][number];
+/** A single triangulated grievance card (claimant/accused/reference → finding). */
+export type Reproche = InvestigationAnalysis["reproches"][number];
+/** One party's account within a grievance. */
+export type ReprocheStatement = Reproche["claimantStatement"];
 export type TimelineEvent = InvestigationAnalysis["timeline"][number];
 export type PersonProfile = InvestigationAnalysis["people"][number];
 export type ConsolidatedWitness = InvestigationAnalysis["witnesses"][number];

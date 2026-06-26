@@ -4,9 +4,10 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { queryKeys } from "@/lib/query-keys";
 import {
   deleteDocumentAction,
+  setIntervieweeRoleAction,
   uploadDocumentAction,
 } from "@/features/documents/actions/documents";
-import type { Case, CaseDocument } from "@/lib/types";
+import type { Case, CaseDocument, IntervieweeRole } from "@/lib/types";
 
 interface CaseResponse {
   case: Case;
@@ -22,6 +23,22 @@ export function useUploadDocument(caseId: string) {
       formData.append("file", file);
       return uploadDocumentAction(formData);
     },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.case(caseId) });
+    },
+  });
+}
+
+export function useSetIntervieweeRole(caseId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      documentId,
+      intervieweeRole,
+    }: {
+      documentId: string;
+      intervieweeRole: IntervieweeRole;
+    }) => setIntervieweeRoleAction(documentId, intervieweeRole),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.case(caseId) });
     },

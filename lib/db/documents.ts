@@ -12,6 +12,7 @@ import type {
   DocumentStatus,
   ExtractedData,
   ExtractionDraftGroup,
+  IntervieweeRole,
 } from "@/lib/types";
 
 export async function listDocumentsForCase(
@@ -50,6 +51,7 @@ export async function createDocumentFromUpload(params: {
   fileName: string;
   fileBytes: ArrayBuffer;
   rawText: string;
+  intervieweeRole: IntervieweeRole | null;
 }): Promise<CaseDocument> {
   const supabase = getSupabaseAdmin();
   const ext = getSupportedExtension(params.fileName) ?? ".pdf";
@@ -71,6 +73,7 @@ export async function createDocumentFromUpload(params: {
       file_name: params.fileName,
       file_url: objectPath,
       status: "uploaded",
+      interviewee_role: params.intervieweeRole,
       raw_text: params.rawText,
     })
     .select("*")
@@ -136,6 +139,36 @@ export async function replaceDocumentWithPdf(params: {
   }
 
   return objectPath;
+}
+
+/**
+ * Update the investigator-assigned party role for a document. Called from the
+ * document row when the role is set or corrected before extraction.
+ */
+export async function setIntervieweeRole(
+  id: string,
+  intervieweeRole: IntervieweeRole
+): Promise<CaseDocument> {
+  const supabase = getSupabaseAdmin();
+  const { data, error } = await supabase
+    .from("documents")
+    .update({ interviewee_role: intervieweeRole })
+    .eq("id", id)
+    .not("status", "in", "(extracting,extracted)")
+    .select("*")
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  if (data) return mapDocument(data);
+
+  const current = await getDocument(id);
+  if (!current) throw new Error("Document not found.");
+  if (current.status === "extracting") {
+    throw new Error("Cannot change the role while extraction is running.");
+  }
+  if (current.status === "extracted") {
+    throw new Error("Cannot change the role after extraction. Re-upload or re-extract from a corrected pre-extraction state.");
+  }
+  throw new Error("Could not update the interviewee role.");
 }
 
 export async function setDocumentStatus(

@@ -5,6 +5,7 @@ import type {
   DocumentStatus,
   ExtractedData,
   ExtractionDraftGroup,
+  IntervieweeRole,
 } from "@/lib/types";
 
 export type Json =
@@ -57,6 +58,7 @@ export type Database = {
           file_name: string;
           file_url: string;
           status: DocumentStatus;
+          interviewee_role: IntervieweeRole | null;
           raw_text: string | null;
           extracted_data: ExtractedData | null;
           extraction_current_step: number;
@@ -73,6 +75,7 @@ export type Database = {
           file_name: string;
           file_url: string;
           status?: DocumentStatus;
+          interviewee_role?: IntervieweeRole | null;
           raw_text?: string | null;
           extracted_data?: ExtractedData | null;
           extraction_current_step?: number;
@@ -100,6 +103,7 @@ export type Database = {
       case_type: CaseType;
       case_type_source: CaseTypeSource;
       document_status: DocumentStatus;
+      interviewee_role: IntervieweeRole;
     };
     CompositeTypes: Record<never, never>;
   };

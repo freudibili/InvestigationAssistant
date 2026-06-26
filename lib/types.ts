@@ -28,6 +28,32 @@ export type CaseTypeSource = "suggested" | "confirmed";
 /** Shown when a case has no type yet. */
 export const UNCLASSIFIED_LABEL = "Unclassified";
 
+/**
+ * The party role the interviewee plays in the investigation. Chosen by the
+ * investigator at upload (and editable before extraction) rather than inferred
+ * by the model: knowing up front whether a transcript is the claimant, the
+ * accused, or a reference person keeps the extractor from guessing — and
+ * mis-assigning — who the claimant and accused are (e.g. listing a witness as
+ * the accused). Distinct from `ExtractedData.role` (the interviewee's job
+ * title) and from `interviewPosition` (whose narrative the testimony supports).
+ */
+export const INTERVIEWEE_ROLES = ["claimant", "accused", "witness"] as const;
+
+export type IntervieweeRole = (typeof INTERVIEWEE_ROLES)[number];
+
+export const INTERVIEWEE_ROLE_LABELS: Record<IntervieweeRole, string> = {
+  claimant: "Claimant",
+  accused: "Accused",
+  witness: "Reference person",
+};
+
+/** Localized (French) sublabel shown alongside the English one for clarity. */
+export const INTERVIEWEE_ROLE_SUBLABELS: Record<IntervieweeRole, string> = {
+  claimant: "plaignant",
+  accused: "personne mise en cause",
+  witness: "personne de référence / témoin",
+};
+
 export const DOCUMENT_STATUSES = [
   "uploaded",
   "extracting",
@@ -42,6 +68,7 @@ export const ANALYSIS_STATUSES = [
   "idle",
   "analyzing",
   "ready",
+  "canceled",
   "failed",
 ] as const;
 
@@ -84,6 +111,12 @@ export interface CaseDocument {
   fileName: string;
   fileUrl: string;
   status: DocumentStatus;
+  /**
+   * The investigator-assigned party role for this interviewee, or null when not
+   * yet chosen. Extraction is blocked until it is set, so the model never has to
+   * infer who the claimant and accused are.
+   */
+  intervieweeRole: IntervieweeRole | null;
   rawText: string | null;
   extractedData: ExtractedData | null;
   extractionCurrentStep: number;

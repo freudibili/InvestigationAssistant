@@ -8,6 +8,10 @@ type ClickableQuoteProvenance = QuoteProvenance & {
   pageNumber: number;
   charStart: number;
   charEnd: number;
+  pageCharStart: number;
+  pageCharEnd: number;
+  normalizedPageCharStart: number;
+  normalizedPageCharEnd: number;
 };
 
 /** The cited source pdf name (a converted non-PDF is served as `.pdf`). */
@@ -119,7 +123,15 @@ export function buildDocumentQuotes(
       provenanceId: provenance?.id ?? null,
       text,
       speaker: quote.speaker?.trim() || null,
+      intervieweeName: data.intervieweeName?.trim() || document.fileName,
+      intervieweeRole: document.intervieweeRole,
       page: provenance?.pageNumber ?? null,
+      charStart: provenance?.charStart ?? null,
+      charEnd: provenance?.charEnd ?? null,
+      pageCharStart: provenance?.pageCharStart ?? null,
+      pageCharEnd: provenance?.pageCharEnd ?? null,
+      normalizedPageCharStart: provenance?.normalizedPageCharStart ?? null,
+      normalizedPageCharEnd: provenance?.normalizedPageCharEnd ?? null,
       documentId: document.id,
       documentName,
     });

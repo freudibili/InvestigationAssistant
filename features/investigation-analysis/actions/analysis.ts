@@ -4,6 +4,8 @@ import { revalidatePath } from "next/cache";
 
 import { listDocumentsForCase } from "@/lib/db/documents";
 import {
+  assertAnalysisIsActive,
+  cancelAnalysis,
   getCaseAnalysisState,
   saveAnalysis,
   setAnalysisFailed,
@@ -22,7 +24,13 @@ import type { InvestigationAnalysis } from "@/features/investigation-analysis/va
  */
 export type AnalyzeCaseResult =
   | { ok: true; analysis: InvestigationAnalysis }
-  | { ok: false; message: string };
+  | { ok: false; canceled: boolean; message: string };
+
+export async function cancelAnalysisAction(caseId: string) {
+  const state = await cancelAnalysis(caseId);
+  revalidatePath(`/cases/${caseId}/analysis`);
+  return state;
+}
 
 /**
  * Run the cross-interview Investigation Analysis for a case. Triggered manually
@@ -35,7 +43,11 @@ export async function analyzeCaseAction(
 ): Promise<AnalyzeCaseResult> {
   const state = await getCaseAnalysisState(caseId);
   if (state.status === "analyzing") {
-    return { ok: false, message: "An analysis is already running for this case." };
+    return {
+      ok: false,
+      canceled: false,
+      message: "An analysis is already running for this case.",
+    };
   }
 
   const runId = crypto.randomUUID();
@@ -44,16 +56,27 @@ export async function analyzeCaseAction(
 
   try {
     const documents = await listDocumentsForCase(caseId);
+    await assertAnalysisIsActive(caseId, runId);
     const analysis = await generateCaseAnalysis(documents);
+    await assertAnalysisIsActive(caseId, runId);
     await saveAnalysis(caseId, runId, analysis);
     revalidatePath(`/cases/${caseId}/analysis`);
     return { ok: true, analysis };
   } catch (error) {
+    if (isCanceledAnalysis(error)) {
+      revalidatePath(`/cases/${caseId}/analysis`);
+      return { ok: false, canceled: true, message: error.message };
+    }
+
     logAnalysisFailure({ caseId, runId, error });
     await setAnalysisFailed(caseId, runId);
     revalidatePath(`/cases/${caseId}/analysis`);
-    return { ok: false, message: toUserMessage(error) };
+    return { ok: false, canceled: false, message: toUserMessage(error) };
   }
+}
+
+function isCanceledAnalysis(error: unknown): error is Error {
+  return error instanceof Error && /canceled|superseded/i.test(error.message);
 }
 
 function toUserMessage(error: unknown): string {

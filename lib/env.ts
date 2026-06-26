@@ -82,6 +82,11 @@ export const env = {
       ? "anthropic"
       : "openai";
   },
+  get analysisProvider(): "openai" | "anthropic" {
+    return process.env.ANALYSIS_PROVIDER === "anthropic"
+      ? "anthropic"
+      : "openai";
+  },
 };
 
 export function getDatabaseEnvironmentIssues(): string[] {

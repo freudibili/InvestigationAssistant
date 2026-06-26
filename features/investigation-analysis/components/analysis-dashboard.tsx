@@ -2,11 +2,10 @@
 
 import { useMemo } from "react";
 import {
-  AlertTriangle,
   CalendarClock,
-  GitCompareArrows,
+  FileText,
+  Gavel,
   HelpCircle,
-  ScrollText,
   UserSearch,
   Users,
 } from "lucide-react";
@@ -17,16 +16,35 @@ import {
   SourceViewerProvider,
   useSourceViewer,
 } from "@/components/pdf/source-viewer-dialog";
+import { INTERVIEWEE_ROLE_LABELS } from "@/lib/types";
 import type {
   InvestigationAnalysis,
   QuoteRef,
+  Reproche,
+  ReprocheStatement,
 } from "@/features/investigation-analysis/types";
 
 /** Lookup helpers resolving the model's id references back to evidence. */
 interface Lookups {
   quoteById: Map<string, QuoteRef>;
   interviewNameById: Map<string, string>;
-  allegationTitleById: Map<string, string>;
+  reprocheTitleById: Map<string, string>;
+}
+
+/** Badge variant per verdict — supported reads strong, unproven reads muted. */
+function verdictVariant(
+  verdict: string
+): "default" | "secondary" | "outline" | "destructive" {
+  switch (verdict) {
+    case "Supported":
+      return "default";
+    case "Partially supported":
+      return "secondary";
+    case "Not established":
+      return "outline";
+    default:
+      return "secondary";
+  }
 }
 
 export function AnalysisDashboard({
@@ -46,8 +64,8 @@ function DashboardBody({ analysis }: { analysis: InvestigationAnalysis }) {
     () => ({
       quoteById: new Map(analysis.quotes.map((q) => [q.id, q])),
       interviewNameById: new Map(analysis.interviews.map((i) => [i.id, i.name])),
-      allegationTitleById: new Map(
-        analysis.allegations.map((a) => [a.id, a.title])
+      reprocheTitleById: new Map(
+        analysis.reproches.map((r) => [r.id, r.title])
       ),
     }),
     [analysis]
@@ -72,133 +90,36 @@ function DashboardBody({ analysis }: { analysis: InvestigationAnalysis }) {
         )}
       </Section>
 
-      <Section icon={ScrollText} title={`Allegations (${analysis.allegations.length})`}>
-        {analysis.allegations.length === 0 ? (
-          <Empty>No consolidated allegations.</Empty>
+      <Section
+        icon={Gavel}
+        title={`Grievances (${analysis.reproches.length})`}
+      >
+        {analysis.reproches.length === 0 ? (
+          <Empty>No grievances triangulated.</Empty>
         ) : (
           <div className="space-y-3">
-            {analysis.allegations.map((allegation) => (
-              <Card key={allegation.id}>
-                <CardHeader>
-                  <CardTitle className="text-base">{allegation.title}</CardTitle>
-                  {allegation.description ? (
-                    <p className="text-muted-foreground text-sm">
-                      {allegation.description}
-                    </p>
-                  ) : null}
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  <PartyLine label="Claimants" names={allegation.claimants} />
-                  <PartyLine label="Subjects" names={allegation.subjects} />
-                  <QuoteList
-                    label="Supporting evidence"
-                    quoteIds={allegation.supportingQuoteIds}
-                    lookups={lookups}
-                  />
-                  <QuoteList
-                    label="Contradictory evidence"
-                    quoteIds={allegation.contradictoryQuoteIds}
-                    lookups={lookups}
-                  />
-                  {allegation.openQuestions.length > 0 ? (
-                    <BulletList
-                      label="Open questions"
-                      items={allegation.openQuestions}
-                    />
-                  ) : null}
-                  {allegation.timelineConsistency ? (
-                    <NoteLine
-                      label="Timeline"
-                      value={allegation.timelineConsistency}
-                    />
-                  ) : null}
-                </CardContent>
-              </Card>
+            {analysis.reproches.map((reproche) => (
+              <ReprocheCard
+                key={reproche.id}
+                reproche={reproche}
+                lookups={lookups}
+              />
             ))}
           </div>
         )}
       </Section>
 
-      <Section
-        icon={AlertTriangle}
-        title={`Patterns (${analysis.mobbingPatterns.length})`}
-      >
-        {analysis.mobbingPatterns.length === 0 ? (
-          <Empty>No recurring patterns identified.</Empty>
-        ) : (
-          <div className="space-y-3">
-            {analysis.mobbingPatterns.map((pattern) => (
-              <Card key={pattern.id}>
-                <CardHeader>
-                  <CardTitle className="text-base">{pattern.title}</CardTitle>
-                  <div className="flex flex-wrap gap-2">
-                    <Badge variant="secondary">{pattern.repetition}</Badge>
-                    <Badge variant="secondary">{pattern.systematicity}</Badge>
-                  </div>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  <PartyLine label="Targets" names={pattern.targets} />
-                  <PartyLine label="Perpetrators" names={pattern.perpetrators} />
-                  <QuoteList
-                    label="Supporting evidence"
-                    quoteIds={pattern.supportingQuoteIds}
-                    lookups={lookups}
-                  />
-                  {pattern.missingEvidence.length > 0 ? (
-                    <BulletList
-                      label="Missing evidence"
-                      items={pattern.missingEvidence}
-                    />
-                  ) : null}
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-        )}
-      </Section>
-
-      <Section
-        icon={GitCompareArrows}
-        title={`Contradictions (${analysis.contradictions.length})`}
-      >
-        {analysis.contradictions.length === 0 ? (
-          <Empty>No contradictions between accounts.</Empty>
-        ) : (
-          <div className="space-y-3">
-            {analysis.contradictions.map((contradiction) => (
-              <Card key={contradiction.id}>
-                <CardContent className="space-y-3 pt-6">
-                  <p className="text-sm">{contradiction.description}</p>
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    <QuoteList
-                      label={
-                        contradiction.interviewAId
-                          ? lookups.interviewNameById.get(
-                              contradiction.interviewAId
-                            ) ?? "Account A"
-                          : "Account A"
-                      }
-                      quoteIds={contradiction.quoteIdsA}
-                      lookups={lookups}
-                    />
-                    <QuoteList
-                      label={
-                        contradiction.interviewBId
-                          ? lookups.interviewNameById.get(
-                              contradiction.interviewBId
-                            ) ?? "Account B"
-                          : "Account B"
-                      }
-                      quoteIds={contradiction.quoteIdsB}
-                      lookups={lookups}
-                    />
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-        )}
-      </Section>
+      {analysis.globalAssessment ? (
+        <Section icon={FileText} title="Overall assessment">
+          <Card>
+            <CardContent className="pt-6">
+              <p className="text-sm leading-relaxed whitespace-pre-line">
+                {analysis.globalAssessment}
+              </p>
+            </CardContent>
+          </Card>
+        </Section>
+      ) : null}
 
       <Section
         icon={CalendarClock}
@@ -267,10 +188,132 @@ function DashboardBody({ analysis }: { analysis: InvestigationAnalysis }) {
 }
 
 /**
- * §7 People — one investigation dossier per person, linking them to the
- * allegations naming them and the quotes they spoke (clickable). People who are
- * only name-dropped (no allegations or quotes) are tucked behind a disclosure so
- * the section stays scannable on large cases.
+ * One grievance, triangulated across the parties — the report's Section 5 unit.
+ * Renders the claimant's, accused's, and each reference person's account (each
+ * with clickable quotes), then a findings/evaluation block reaching a verdict.
+ */
+function ReprocheCard({
+  reproche,
+  lookups,
+}: {
+  reproche: Reproche;
+  lookups: Lookups;
+}) {
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <CardTitle className="text-base">{reproche.title}</CardTitle>
+          <Badge variant={verdictVariant(reproche.verdict)}>
+            {reproche.verdict}
+          </Badge>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Badge variant="outline">{reproche.grievanceType}</Badge>
+        </div>
+        {reproche.description ? (
+          <p className="text-muted-foreground text-sm">{reproche.description}</p>
+        ) : null}
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="space-y-2">
+          <StatementBlock
+            label="Claimant"
+            statement={reproche.claimantStatement}
+            lookups={lookups}
+          />
+          <StatementBlock
+            label="Accused"
+            statement={reproche.accusedStatement}
+            lookups={lookups}
+          />
+          {reproche.referenceStatements.map((statement, index) => (
+            <StatementBlock
+              key={index}
+              label={`Reference person ${index + 1}`}
+              statement={statement}
+              lookups={lookups}
+            />
+          ))}
+        </div>
+
+        <div className="rounded-lg border bg-muted/30 p-3 space-y-2">
+          <p className="text-xs font-medium uppercase tracking-wide">
+            Findings and evaluation
+          </p>
+          {reproche.findings.length > 0 ? (
+            <ul className="list-disc space-y-1 pl-4 text-sm">
+              {reproche.findings.map((finding, index) => (
+                <li key={index}>{finding}</li>
+              ))}
+            </ul>
+          ) : null}
+          {reproche.evaluation ? (
+            <p className="text-sm leading-relaxed whitespace-pre-line">
+              {reproche.evaluation}
+            </p>
+          ) : null}
+        </div>
+
+        {reproche.openQuestions.length > 0 ? (
+          <BulletList label="Open questions" items={reproche.openQuestions} />
+        ) : null}
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * One party's account within a grievance. Labelled with the role and (when the
+ * party was interviewed) the interviewee's name. A role with no interview on
+ * record still renders, so a missing account reads as a visible gap.
+ */
+function StatementBlock({
+  label,
+  statement,
+  lookups,
+}: {
+  label: string;
+  statement: ReprocheStatement;
+  lookups: Lookups;
+}) {
+  const name = statement.interviewId
+    ? lookups.interviewNameById.get(statement.interviewId)
+    : null;
+  const hasContent =
+    Boolean(statement.summary) || statement.quoteIds.length > 0;
+
+  return (
+    <div className="rounded-md border-l-2 border-muted pl-3 py-1">
+      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+        {label}
+        {name ? ` — ${name}` : ""}
+      </p>
+      {statement.summary ? (
+        <p className="mt-1 text-sm">{statement.summary}</p>
+      ) : !hasContent ? (
+        <p className="mt-1 text-sm italic text-muted-foreground">
+          No account on record.
+        </p>
+      ) : null}
+      {statement.quoteIds.length > 0 ? (
+        <div className="mt-1.5">
+          <QuoteList
+            label="Evidence"
+            quoteIds={statement.quoteIds}
+            lookups={lookups}
+          />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * People — one investigation dossier per person, linking them to the grievances
+ * naming them and the quotes they spoke (clickable). People who are only
+ * name-dropped (no grievances or quotes) are tucked behind a disclosure so the
+ * section stays scannable on large cases.
  */
 function PeopleSection({
   analysis,
@@ -281,12 +324,12 @@ function PeopleSection({
 }) {
   const withSignal = analysis.people.filter(
     (person) =>
-      person.relatedAllegationIds.length > 0 ||
+      person.relatedReprocheIds.length > 0 ||
       person.supportingQuoteIds.length > 0
   );
   const mentionOnly = analysis.people.filter(
     (person) =>
-      person.relatedAllegationIds.length === 0 &&
+      person.relatedReprocheIds.length === 0 &&
       person.supportingQuoteIds.length === 0
   );
 
@@ -327,8 +370,8 @@ function PersonProfile({
   person: InvestigationAnalysis["people"][number];
   lookups: Lookups;
 }) {
-  const allegationTitles = person.relatedAllegationIds
-    .map((id) => lookups.allegationTitleById.get(id))
+  const reprocheTitles = person.relatedReprocheIds
+    .map((id) => lookups.reprocheTitleById.get(id))
     .filter((title): title is string => Boolean(title));
 
   return (
@@ -340,8 +383,8 @@ function PersonProfile({
           {person.interviewIds.length === 1 ? "" : "s"}
         </p>
       </div>
-      {allegationTitles.length > 0 ? (
-        <PartyLine label="Related allegations" names={allegationTitles} />
+      {reprocheTitles.length > 0 ? (
+        <PartyLine label="Related grievances" names={reprocheTitles} />
       ) : null}
       <QuoteList
         label="Supporting quotes"
@@ -355,7 +398,7 @@ function PersonProfile({
 function SummaryHeader({ analysis }: { analysis: InvestigationAnalysis }) {
   const stats = [
     { label: "Interviews", value: analysis.interviewCount },
-    { label: "Allegations", value: analysis.allegationCount },
+    { label: "Grievances", value: analysis.reprocheCount },
     { label: "Witnesses", value: analysis.witnessCount },
     { label: "Events", value: analysis.eventCount },
   ];
@@ -409,15 +452,6 @@ function PartyLine({ label, names }: { label: string; names: string[] }) {
     <p className="text-sm">
       <span className="text-muted-foreground">{label}: </span>
       {names.join(", ")}
-    </p>
-  );
-}
-
-function NoteLine({ label, value }: { label: string; value: string }) {
-  return (
-    <p className="text-sm">
-      <span className="text-muted-foreground">{label}: </span>
-      {value}
     </p>
   );
 }
@@ -478,16 +512,34 @@ function QuoteList({
 function QuoteChip({ quote }: { quote: QuoteRef }) {
   const openSource = useSourceViewer();
   const clickable = openSource !== null && quote.page !== null;
+  const roleLabel = quote.intervieweeRole
+    ? INTERVIEWEE_ROLE_LABELS[quote.intervieweeRole]
+    : null;
+  const sourceLabel = [
+    quote.intervieweeName ?? quote.documentName,
+    roleLabel,
+    quote.page !== null ? `Page ${quote.page}` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
 
   const body = (
-    <span className="block text-sm">
-      <span className="text-muted-foreground">“</span>
-      {quote.text}
-      <span className="text-muted-foreground">”</span>
-      <span className="text-muted-foreground ml-1 text-xs">
-        — {quote.speaker ?? "Unknown"}
-        {quote.page !== null ? `, ${quote.documentName} p.${quote.page}` : ""}
+    <span className="block space-y-1.5">
+      <span className="block text-sm">
+        <span className="text-muted-foreground">“</span>
+        {quote.text}
+        <span className="text-muted-foreground">”</span>
+        <span className="text-muted-foreground ml-1 text-xs">
+          — {quote.speaker ?? "Unknown"}
+        </span>
       </span>
+      <Badge
+        variant={clickable ? "secondary" : "outline"}
+        className="gap-1 text-xs font-normal"
+      >
+        <FileText className="size-3" />
+        {sourceLabel}
+      </Badge>
     </span>
   );
 
@@ -505,6 +557,12 @@ function QuoteChip({ quote }: { quote: QuoteRef }) {
           label: `Page ${quote.page}`,
           page: quote.page as number,
           quoteId: quote.provenanceId ?? undefined,
+          charStart: quote.charStart,
+          charEnd: quote.charEnd,
+          pageCharStart: quote.pageCharStart,
+          pageCharEnd: quote.pageCharEnd,
+          normalizedPageCharStart: quote.normalizedPageCharStart,
+          normalizedPageCharEnd: quote.normalizedPageCharEnd,
           quote: quote.text,
         })
       }

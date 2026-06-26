@@ -17,6 +17,17 @@ export function getExtractionProvider(): ExtractionProvider {
     : openaiProvider;
 }
 
+/**
+ * Resolve the backend for the cross-interview Investigation Analysis from
+ * `ANALYSIS_PROVIDER`. The provider contract ("send a system + user prompt,
+ * return JSON text and whether it was truncated") is the same as extraction, so
+ * the two flows share the same provider implementations — only the default
+ * differs: analysis defaults to Anthropic, extraction to OpenAI.
+ */
+export function getAnalysisProvider(): ExtractionProvider {
+  return env.analysisProvider === "openai" ? openaiProvider : anthropicProvider;
+}
+
 export type {
   ExtractionProvider,
   ExtractionCompletion,

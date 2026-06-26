@@ -1,4 +1,4 @@
-import type { CaseDocument } from "@/lib/types";
+import type { CaseDocument, IntervieweeRole } from "@/lib/types";
 import {
   buildDocumentQuotes,
   normalizeText,
@@ -28,6 +28,7 @@ export interface AiInterview {
   id: string;
   name: string;
   role: string | null;
+  roleHint: "claimant" | "accused" | "reference";
   date: string | null;
   issue: string;
   primaryClaimants: string[];
@@ -64,7 +65,7 @@ export interface AggregateResult {
   people: { name: string; interviewIds: string[] }[];
   counts: {
     interviewCount: number;
-    allegationCount: number;
+    reprocheCount: number;
     witnessCount: number;
     eventCount: number;
   };
@@ -215,6 +216,7 @@ export function buildAggregate(documents: CaseDocument[]): AggregateResult {
       id,
       name,
       role: data.role ?? null,
+      roleHint: roleHintForIntervieweeRole(document.intervieweeRole),
       date: data.interviewDate ?? null,
       issue: data.investigationScope?.scopeSummary ?? data.summary ?? "",
       primaryClaimants: data.investigationScope?.primaryClaimants ?? [],
@@ -280,7 +282,8 @@ export function buildAggregate(documents: CaseDocument[]): AggregateResult {
     people: peopleList,
     counts: {
       interviewCount: interviews.length,
-      allegationCount,
+      // Fallback only — the real count is the model's consolidated grievances.
+      reprocheCount: allegationCount,
       witnessCount: consolidatedWitnesses.length,
       eventCount: timeline.length,
     },
@@ -295,6 +298,13 @@ export function buildAggregate(documents: CaseDocument[]): AggregateResult {
       events: aiEvents,
     },
   };
+}
+
+function roleHintForIntervieweeRole(
+  role: IntervieweeRole | null
+): AiInterview["roleHint"] {
+  if (role === "claimant" || role === "accused") return role;
+  return "reference";
 }
 
 /** Merge duplicate events across interviews and sort chronologically. */

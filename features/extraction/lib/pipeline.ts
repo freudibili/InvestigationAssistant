@@ -2,7 +2,7 @@ import "server-only";
 
 import { ZodError } from "zod";
 import { extractionResponseSchema } from "@/lib/validation";
-import { CASE_TYPES } from "@/lib/types";
+import { CASE_TYPES, type IntervieweeRole } from "@/lib/types";
 import { env } from "@/lib/env";
 import type { ExtractionResponse } from "@/lib/validation";
 import {
@@ -57,7 +57,7 @@ export type ExtractionMode = "lean" | "full";
 const DEFAULT_EXTRACTION_MODE: ExtractionMode = "lean";
 
 const LEAN_USER_PROMPT = `Analyze this workplace investigation interview transcript source unit in lean extraction mode.
-
+{{INTERVIEWEE_ROLE_GUIDANCE}}
 Extract only material useful to an investigator at the first review stage:
 
 1. Document metadata: interviewee name, interview date, interviewee role, interviewer names.
@@ -181,7 +181,7 @@ Transcript:
 """`;
 
 const FULL_USER_PROMPT = `Analyze this workplace investigation interview transcript source unit.
-
+{{INTERVIEWEE_ROLE_GUIDANCE}}
 Optimize for investigation, evidence analysis, traceability, and report preparation. Do not optimize for summarization.
 
 For the provided source label, extract:
@@ -532,20 +532,26 @@ Page drafts:
  */
 export async function extractInterviewData(
   transcript: string,
-  mode: ExtractionMode = DEFAULT_EXTRACTION_MODE
+  mode: ExtractionMode = DEFAULT_EXTRACTION_MODE,
+  intervieweeRole: IntervieweeRole | null = null
 ): Promise<ExtractionResponse> {
-  return requestExtraction(buildUserPrompt(transcript, mode), mode);
+  return requestExtraction(
+    buildUserPrompt(transcript, mode, intervieweeRole),
+    mode
+  );
 }
 
 export async function extractInterviewChunk(
   chunk: ExtractionChunk,
   documentName: string,
+  intervieweeRole: IntervieweeRole | null = null,
   mode: ExtractionMode = DEFAULT_EXTRACTION_MODE
 ): Promise<ExtractionResponse> {
   const response = await requestExtraction(
     buildUserPrompt(
       `Document: ${documentName}\n${chunkProvenanceHeader(chunk)}\n\n${chunk.text}`,
-      mode
+      mode,
+      intervieweeRole
     ),
     mode
   );
@@ -562,10 +568,13 @@ export async function extractInterviewChunk(
 export async function extractInterviewChunkWithFallback(
   chunk: ExtractionChunk,
   documentName: string,
+  intervieweeRole: IntervieweeRole | null = null,
   mode: ExtractionMode = DEFAULT_EXTRACTION_MODE
 ): Promise<ExtractionResponse[]> {
   try {
-    return [await extractInterviewChunk(chunk, documentName, mode)];
+    return [
+      await extractInterviewChunk(chunk, documentName, intervieweeRole, mode),
+    ];
   } catch (error) {
     const singlePages = splitChunkIntoSinglePages(chunk);
     if (!isRecoverableExtractionError(error) || singlePages.length < 2) {
@@ -573,14 +582,47 @@ export async function extractInterviewChunkWithFallback(
     }
 
     return Promise.all(
-      singlePages.map((page) => extractInterviewChunk(page, documentName, mode))
+      singlePages.map((page) =>
+        extractInterviewChunk(page, documentName, intervieweeRole, mode)
+      )
     );
   }
 }
 
-function buildUserPrompt(transcript: string, mode: ExtractionMode): string {
+function buildUserPrompt(
+  transcript: string,
+  mode: ExtractionMode,
+  intervieweeRole: IntervieweeRole | null = null
+): string {
   const prompt = mode === "full" ? FULL_USER_PROMPT : LEAN_USER_PROMPT;
-  return prompt.replace("{{TRANSCRIPT}}", transcript);
+  return prompt
+    .replace("{{INTERVIEWEE_ROLE_GUIDANCE}}", intervieweeRoleGuidance(intervieweeRole))
+    .replace("{{TRANSCRIPT}}", transcript);
+}
+
+/**
+ * An authoritative statement of who this interviewee is in the dispute, so the
+ * model attributes the claimant/accused scope from a known fact instead of
+ * guessing it per page (the guess that previously put a witness's interview's
+ * subject in the wrong scope bucket). Returns "" when the role is unknown, in
+ * which case the model falls back to inferring it as before. `interviewPosition`
+ * stays inferred either way: a witness can still "Support accused".
+ */
+function intervieweeRoleGuidance(role: IntervieweeRole | null): string {
+  if (!role) return "";
+
+  const shared =
+    "Treat this as an authoritative given — do not infer, second-guess, or contradict it. This fixes who the parties are; interviewPosition is separate and may still differ (a reference person can support either side).";
+
+  if (role === "claimant") {
+    return `\nKNOWN INTERVIEWEE ROLE: this transcript is the CLAIMANT (plaignant) — the person who brought the complaint. In investigationScope, list this interviewee under primaryClaimants and never under primaryAccused; the person(s) they accuse are the primaryAccused. ${shared}\n`;
+  }
+
+  if (role === "accused") {
+    return `\nKNOWN INTERVIEWEE ROLE: this transcript is the ACCUSED (personne mise en cause) — the person the complaint is against. In investigationScope, list this interviewee under primaryAccused and never under primaryClaimants; the person(s) bringing the complaint are the primaryClaimants. ${shared}\n`;
+  }
+
+  return `\nKNOWN INTERVIEWEE ROLE: this transcript is a REFERENCE PERSON / WITNESS (personne de référence / témoin) — neither the claimant nor the accused. Do NOT list this interviewee under primaryClaimants or primaryAccused; identify the actual claimant and accused from the people they describe. ${shared}\n`;
 }
 
 /**
@@ -1332,7 +1374,7 @@ function normalizeExtractionResponse(
   );
   const riskAreas = normalizeEvidenceItems(extraction.riskAreas);
 
-  return {
+  const normalized: ExtractionResponse = {
     ...extraction,
     intervieweeName: normalizeMetadataName(extraction.intervieweeName),
     interviewerNames,
@@ -1403,6 +1445,91 @@ function normalizeExtractionResponse(
       }))
       .filter((page) => page.sourcePage.length > 0),
   };
+
+  return applyCanonicalIdentities(normalized);
+}
+
+/**
+ * Collapse the spelling variants the model already grouped under
+ * `canonicalIdentities` everywhere else a person name is used as data:
+ * investigation scope, allegation claimant/subject, witnesses, and event
+ * participants. The model reliably records that "Caroline Meneor", "Menet", and
+ * "Aumieux" are one person in canonicalIdentities, but leaves the raw variants
+ * scattered across the scope arrays, where the fuzzy person matcher cannot merge
+ * them (different surnames score below its similarity threshold). Left
+ * unresolved, one person surfaces as several distinct claimants/accused, which
+ * inverts roles downstream. Rewriting every person field through the identity
+ * map — then re-deduping — makes the scope arrays agree with the identities.
+ */
+function applyCanonicalIdentities(
+  extraction: ExtractionResponse
+): ExtractionResponse {
+  const resolve = buildCanonicalResolver(extraction.canonicalIdentities);
+
+  const renameWitnesses = <T extends { name: string }>(items: T[]): T[] =>
+    items.map((item) => ({ ...item, name: resolve(item.name) }));
+  const renameAllegations = (items: AllegationItem[]): AllegationItem[] =>
+    items.map((item) => ({
+      ...item,
+      claimant: item.claimant === null ? null : resolve(item.claimant),
+      subject: item.subject === null ? null : resolve(item.subject),
+      witnesses: renameWitnesses(item.witnesses),
+    }));
+  const renameEvents = (items: EventItem[]): EventItem[] =>
+    items.map((item) => ({
+      ...item,
+      participants: item.participants.map(resolve),
+    }));
+
+  return {
+    ...extraction,
+    investigationScope: {
+      ...extraction.investigationScope,
+      primaryClaimants: normalizePersonList(
+        extraction.investigationScope.primaryClaimants.map(resolve)
+      ),
+      primaryAccused: normalizePersonList(
+        extraction.investigationScope.primaryAccused.map(resolve)
+      ),
+    },
+    allegations: normalizeAllegations(renameAllegations(extraction.allegations)),
+    peopleMentioned: normalizePersonList(extraction.peopleMentioned.map(resolve)),
+    keyEvents: normalizeEvents(renameEvents(extraction.keyEvents)),
+    potentialWitnesses: normalizeWitnessItems(
+      renameWitnesses(extraction.potentialWitnesses)
+    ),
+    consolidatedWitnesses: normalizeConsolidatedWitnessItems(
+      renameWitnesses(extraction.consolidatedWitnesses)
+    ),
+    pageFindings: extraction.pageFindings.map((finding) => ({
+      ...finding,
+      allegations: normalizeAllegations(renameAllegations(finding.allegations)),
+      potentialWitnesses: normalizeWitnessItems(
+        renameWitnesses(finding.potentialWitnesses)
+      ),
+      relevantEvents: normalizeEvents(renameEvents(finding.relevantEvents)),
+    })),
+  };
+}
+
+/**
+ * Build a `variant spelling -> canonical name` resolver from the consolidated
+ * identities. Every spelling the model attached to an identity (the canonical
+ * name and each variant) maps to that identity's canonical name; unknown names
+ * pass through unchanged. Matching is done on the normalized comparison key so
+ * accents, casing, and punctuation differences still resolve.
+ */
+function buildCanonicalResolver(
+  identities: IdentityItem[]
+): (name: string) => string {
+  const byVariant = new Map<string, string>();
+  for (const identity of identities) {
+    for (const name of [identity.canonicalName, ...identity.variants]) {
+      const key = normalizeForComparison(name);
+      if (key) byVariant.set(key, identity.canonicalName);
+    }
+  }
+  return (name) => byVariant.get(normalizeForComparison(name)) ?? name;
 }
 
 type EvidenceItem = ExtractionResponse["opinions"][number];
@@ -1661,27 +1788,98 @@ function normalizeConsolidatedWitnessItems(
 }
 
 function normalizeIdentityItems(items: IdentityItem[]): IdentityItem[] {
-  return dedupeByKey(
-    items
-      .map((item) => {
-        const canonicalName =
-          normalizeMetadataName(item.canonicalName) ??
-          item.canonicalName.trim();
-        const canonicalKey = normalizeForComparison(canonicalName);
-        const variants = normalizePersonList(item.variants).filter(
-          (variant) => normalizeForComparison(variant) !== canonicalKey
-        );
+  const cleaned = items
+    .map((item) => ({
+      canonicalName:
+        normalizeMetadataName(item.canonicalName) ?? item.canonicalName.trim(),
+      variants: normalizePersonList(item.variants),
+      role: normalizeNullableText(item.role),
+      sourcePages: normalizeSourcePages(item.sourcePages),
+    }))
+    .filter((item) => item.canonicalName.length > 0);
 
-        return {
-          canonicalName,
-          variants: uniqueTrimmed(variants),
-          role: normalizeNullableText(item.role),
-          sourcePages: normalizeSourcePages(item.sourcePages),
-        };
-      })
-      .filter((item) => item.canonicalName.length > 0),
-    (item) => normalizeForComparison(item.canonicalName)
-  );
+  return mergeIdentities(cleaned);
+}
+
+/**
+ * Merge identity entries that describe the same person. The model emits one
+ * identity per page draft, so the same person can arrive as several entries with
+ * different chosen canonical spellings (e.g. "Caroline Menet" on one page,
+ * "Caroline Aumieux" on another) that only overlap through their variant lists.
+ * Deduping by canonical name alone would keep those entries apart and leave each
+ * with a partial variant list, so the resolver above could not collapse every
+ * spelling. We instead connect entries transitively through every spelling the
+ * model grouped together and collapse each connected group to one canonical name
+ * with the union of its variants, role, and source pages. This only ever merges
+ * spellings the model itself already asserted belong to one person — it never
+ * infers a new merge.
+ */
+function mergeIdentities(items: IdentityItem[]): IdentityItem[] {
+  type Group = {
+    displays: Map<string, string>;
+    canonicalKeys: string[];
+    roles: string[];
+    sourcePages: string[];
+  };
+  const groups: Group[] = [];
+
+  for (const item of items) {
+    const entries = [item.canonicalName, ...item.variants]
+      .map((name) => ({ key: normalizeForComparison(name), display: name }))
+      .filter((entry) => entry.key.length > 0);
+    if (entries.length === 0) continue;
+
+    const matched = groups.filter((group) =>
+      entries.some((entry) => group.displays.has(entry.key))
+    );
+    const group: Group = matched[0] ?? {
+      displays: new Map(),
+      canonicalKeys: [],
+      roles: [],
+      sourcePages: [],
+    };
+    if (matched.length === 0) groups.push(group);
+
+    // This entry can bridge several existing groups; fold the extras into the
+    // first match and drop them.
+    for (const other of matched.slice(1)) {
+      for (const [key, display] of other.displays) {
+        if (!group.displays.has(key)) group.displays.set(key, display);
+      }
+      group.canonicalKeys.push(...other.canonicalKeys);
+      group.roles.push(...other.roles);
+      group.sourcePages.push(...other.sourcePages);
+      groups.splice(groups.indexOf(other), 1);
+    }
+
+    for (const entry of entries) {
+      if (!group.displays.has(entry.key)) {
+        group.displays.set(entry.key, entry.display);
+      }
+    }
+    group.canonicalKeys.push(normalizeForComparison(item.canonicalName));
+    if (item.role) group.roles.push(item.role);
+    group.sourcePages.push(...item.sourcePages);
+  }
+
+  return groups.map((group) => {
+    const canonicalName = selectCanonicalName(
+      group.canonicalKeys
+        .map((key) => group.displays.get(key))
+        .filter((name): name is string => Boolean(name))
+    );
+    const canonicalKey = normalizeForComparison(canonicalName);
+    return {
+      canonicalName,
+      variants: uniqueTrimmed(
+        [...group.displays]
+          .filter(([key]) => key !== canonicalKey)
+          .map(([, display]) => display)
+      ),
+      role: group.roles[0] ?? null,
+      sourcePages: normalizeSourcePages(group.sourcePages),
+    };
+  });
 }
 
 /**

@@ -87,6 +87,43 @@ export async function startAnalysis(
   if (error) throw new Error(error.message);
 }
 
+export async function cancelAnalysis(caseId: string): Promise<AnalysisState> {
+  const supabase = getSupabaseAdmin();
+  const { data, error } = await supabase
+    .from("cases")
+    .update({ investigation_analysis_status: "canceled" })
+    .eq("id", caseId)
+    .eq("investigation_analysis_status", "analyzing")
+    .select(
+      "investigation_analysis_status, investigation_analysis_run_id, investigation_analysis_at"
+    )
+    .maybeSingle();
+
+  if (error) throw new Error(error.message);
+  if (data) {
+    return {
+      status: data.investigation_analysis_status ?? "idle",
+      analysisRunId: data.investigation_analysis_run_id,
+      generatedAt: data.investigation_analysis_at,
+    };
+  }
+
+  return getCaseAnalysisState(caseId);
+}
+
+export async function assertAnalysisIsActive(
+  caseId: string,
+  runId: string
+): Promise<void> {
+  const state = await getCaseAnalysisState(caseId);
+  if (state.status === "canceled") {
+    throw new Error("Analysis canceled.");
+  }
+  if (state.status !== "analyzing" || state.analysisRunId !== runId) {
+    throw new Error("Analysis was superseded.");
+  }
+}
+
 /**
  * Persist a finished analysis. Guarded on the live run so a superseded run can't
  * clobber a newer one, mirroring the extraction write guards.

@@ -5,7 +5,10 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { queryKeys } from "@/lib/query-keys";
 import { fetchJson } from "@/lib/api/fetcher";
 import type { AnalysisStatus } from "@/lib/types";
-import { analyzeCaseAction } from "@/features/investigation-analysis/actions/analysis";
+import {
+  analyzeCaseAction,
+  cancelAnalysisAction,
+} from "@/features/investigation-analysis/actions/analysis";
 import type { InvestigationAnalysis } from "@/features/investigation-analysis/validation";
 
 /** Client mirror of the server `CaseAnalysis` read (lib/db is server-only). */
@@ -37,7 +40,11 @@ export function useAnalyzeCase(caseId: string) {
       // The action returns failures instead of throwing (so the real message
       // survives in production); re-throw on the client for react-query.
       const result = await analyzeCaseAction(caseId);
-      if (!result.ok) throw new Error(result.message);
+      if (!result.ok) {
+        const error = new Error(result.message);
+        if (result.canceled) error.name = "AnalysisCanceledError";
+        throw error;
+      }
       return result.analysis;
     },
     onMutate: async () => {
@@ -62,12 +69,60 @@ export function useAnalyzeCase(caseId: string) {
         }
       );
     },
-    onError: () => {
+    onError: (error) => {
+      queryClient.setQueryData<CaseAnalysisResponse>(
+        queryKeys.analysis(caseId),
+        (current) => {
+          if (
+            current?.status === "analyzing" &&
+            error instanceof Error &&
+            error.name === "AnalysisCanceledError"
+          ) {
+            return current;
+          }
+
+          const status =
+            current?.status === "canceled" ||
+            (error instanceof Error && error.name === "AnalysisCanceledError")
+              ? "canceled"
+              : "failed";
+
+          return {
+            status,
+            generatedAt: current?.generatedAt ?? null,
+            analysis: current?.analysis ?? null,
+          };
+        }
+      );
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.analysis(caseId) });
+    },
+  });
+}
+
+export function useCancelAnalysis(caseId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => cancelAnalysisAction(caseId),
+    onMutate: async () => {
+      await queryClient.cancelQueries({ queryKey: queryKeys.analysis(caseId) });
+
       queryClient.setQueryData<CaseAnalysisResponse>(
         queryKeys.analysis(caseId),
         (current) => ({
-          status: "failed",
+          status: "canceled",
           generatedAt: current?.generatedAt ?? null,
+          analysis: current?.analysis ?? null,
+        })
+      );
+    },
+    onSuccess: (state) => {
+      queryClient.setQueryData<CaseAnalysisResponse>(
+        queryKeys.analysis(caseId),
+        (current) => ({
+          status: state.status,
+          generatedAt: state.generatedAt,
           analysis: current?.analysis ?? null,
         })
       );

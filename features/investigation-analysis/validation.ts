@@ -20,8 +20,16 @@ export const quoteRefSchema = z.object({
   provenanceId: z.string().nullable().default(null),
   text: z.string(),
   speaker: z.string().nullable().default(null),
+  intervieweeName: z.string().nullable().default(null),
+  intervieweeRole: z.enum(["claimant", "accused", "witness"]).nullable().default(null),
   /** 1-based PDF page, or null when the source had no real pagination. */
   page: z.number().int().positive().nullable().default(null),
+  charStart: z.number().int().nonnegative().nullable().default(null),
+  charEnd: z.number().int().nonnegative().nullable().default(null),
+  pageCharStart: z.number().int().nonnegative().nullable().default(null),
+  pageCharEnd: z.number().int().nonnegative().nullable().default(null),
+  normalizedPageCharStart: z.number().int().nonnegative().nullable().default(null),
+  normalizedPageCharEnd: z.number().int().nonnegative().nullable().default(null),
   documentId: z.string(),
   documentName: z.string(),
 });
@@ -46,55 +54,73 @@ export const sourceRefSchema = z.object({
   label: z.string(),
 });
 
-const repetitionSchema = z
-  .enum(["Repeated", "Isolated", "Unclear"])
+/** Whether a grievance describes a recurring pattern or a one-off incident. */
+const grievanceTypeSchema = z
+  .enum(["Recurring", "Incident", "Unclear"])
   .default("Unclear");
-const systematicitySchema = z
-  .enum(["Systematic", "Isolated", "Unclear"])
-  .default("Unclear");
+
+/**
+ * The investigator's finding on a grievance after triangulating the accounts.
+ * "Word against word" is the report's "parole contre parole" — directly
+ * conflicting accounts with no corroborating evidence either way.
+ */
+const verdictSchema = z
+  .enum([
+    "Supported",
+    "Partially supported",
+    "Not established",
+    "Word against word",
+    "Requires investigator assessment",
+  ])
+  .default("Requires investigator assessment");
 
 // ---------------------------------------------------------------------------
 // AI response (reasoning sections only; references by id)
 // ---------------------------------------------------------------------------
 
-const aiAllegationSchema = z.object({
+/**
+ * One party's account of a grievance. `interviewId` ties the summary back to a
+ * real interview (so the role can be labelled with the interviewee's name);
+ * `quoteIds` reference verbatim evidence the dashboard resolves and links. A
+ * null `interviewId` means this role was not interviewed (e.g. a missing
+ * account) — the slot is still rendered so the gap is visible.
+ */
+const aiStatementSchema = z.object({
+  interviewId: z.string().nullable().default(null),
+  summary: z.string().default(""),
+  quoteIds: stringArray,
+});
+
+/**
+ * A single grievance ("reproche"), triangulated across the parties — the core
+ * unit of the report's Section 5. Each carries the claimant's account, the
+ * accused's account, any reference persons' accounts, and a findings/evaluation
+ * block reaching a verdict.
+ */
+const aiReprocheSchema = z.object({
   id: z.string(),
   title: z.string(),
+  grievanceType: grievanceTypeSchema,
   description: z.string().default(""),
-  claimants: stringArray,
-  subjects: stringArray,
-  relatedInterviewIds: stringArray,
-  supportingInterviewIds: stringArray,
-  contradictoryInterviewIds: stringArray,
-  supportingQuoteIds: stringArray,
-  contradictoryQuoteIds: stringArray,
-  relatedWitnesses: stringArray,
-  relatedEventIds: stringArray,
-  timelineConsistency: z.string().default(""),
+  claimantStatement: aiStatementSchema.default({
+    interviewId: null,
+    summary: "",
+    quoteIds: [],
+  }),
+  accusedStatement: aiStatementSchema.default({
+    interviewId: null,
+    summary: "",
+    quoteIds: [],
+  }),
+  /** Reference persons in order — rendered as "Reference person 1", "2", … */
+  referenceStatements: z.array(aiStatementSchema).default([]),
+  /** Bullet points of convergences and divergences across the accounts. */
+  findings: stringArray,
+  /** Prose evaluation triangulating the accounts and justifying the verdict. */
+  evaluation: z.string().default(""),
+  verdict: verdictSchema,
   openQuestions: stringArray,
-});
-
-const aiPatternSchema = z.object({
-  id: z.string(),
-  title: z.string(),
-  targets: stringArray,
-  perpetrators: stringArray,
-  relatedAllegationIds: stringArray,
-  relatedInterviewIds: stringArray,
-  supportingQuoteIds: stringArray,
-  timelineConsistency: z.string().default(""),
-  repetition: repetitionSchema,
-  systematicity: systematicitySchema,
-  missingEvidence: stringArray,
-});
-
-const aiContradictionSchema = z.object({
-  id: z.string(),
-  description: z.string(),
-  interviewAId: z.string().nullable().default(null),
-  interviewBId: z.string().nullable().default(null),
-  quoteIdsA: stringArray,
-  quoteIdsB: stringArray,
+  relatedEventIds: stringArray,
 });
 
 const aiGapsSchema = z.object({
@@ -105,9 +131,9 @@ const aiGapsSchema = z.object({
 
 export const analysisResponseSchema = z.object({
   scopeSummary: z.string().default(""),
-  allegations: z.array(aiAllegationSchema).default([]),
-  mobbingPatterns: z.array(aiPatternSchema).default([]),
-  contradictions: z.array(aiContradictionSchema).default([]),
+  reproches: z.array(aiReprocheSchema).default([]),
+  /** Case-level synthesis across all grievances (the report's §6). */
+  globalAssessment: z.string().default(""),
   gaps: aiGapsSchema.default({
     missingInterviews: [],
     missingEvidence: [],
@@ -127,13 +153,8 @@ const partySchema = z.object({
   interviewIds: stringArray,
 });
 
-const mergedAllegationSchema = aiAllegationSchema;
-
-const patternSchema = aiPatternSchema.extend({
-  status: z.string().default("Requires investigator assessment"),
-});
-
-const contradictionSchema = aiContradictionSchema;
+/** Persisted reproche shape == the AI shape (statements reference ids the dashboard resolves). */
+const reprocheSchema = aiReprocheSchema;
 
 const timelineEventSchema = z.object({
   id: z.string(),
@@ -147,7 +168,7 @@ const timelineEventSchema = z.object({
 const personProfileSchema = z.object({
   name: z.string(),
   interviewIds: stringArray,
-  relatedAllegationIds: stringArray,
+  relatedReprocheIds: stringArray,
   supportingQuoteIds: stringArray,
   eventIds: stringArray,
   witnesses: stringArray,
@@ -163,16 +184,15 @@ const witnessSchema = z.object({
 export const investigationAnalysisSchema = z.object({
   generatedAt: z.string(),
   interviewCount: z.number().int().nonnegative().default(0),
-  allegationCount: z.number().int().nonnegative().default(0),
+  reprocheCount: z.number().int().nonnegative().default(0),
   witnessCount: z.number().int().nonnegative().default(0),
   eventCount: z.number().int().nonnegative().default(0),
   scopeSummary: z.string().default(""),
+  globalAssessment: z.string().default(""),
   interviews: z.array(interviewRefSchema).default([]),
   quotes: z.array(quoteRefSchema).default([]),
   mainParties: z.array(partySchema).default([]),
-  allegations: z.array(mergedAllegationSchema).default([]),
-  mobbingPatterns: z.array(patternSchema).default([]),
-  contradictions: z.array(contradictionSchema).default([]),
+  reproches: z.array(reprocheSchema).default([]),
   timeline: z.array(timelineEventSchema).default([]),
   people: z.array(personProfileSchema).default([]),
   witnesses: z.array(witnessSchema).default([]),

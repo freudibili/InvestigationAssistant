@@ -93,6 +93,15 @@ export async function extractDocumentAction(
     };
   }
 
+  if (!document.intervieweeRole) {
+    return {
+      ok: false,
+      canceled: false,
+      message:
+        "Select the interviewee's role (claimant, accused, or reference person) before extracting.",
+    };
+  }
+
   const runId = crypto.randomUUID();
   await startDocumentExtraction(documentId, runId);
   revalidatePath(`/cases/${document.caseId}/extraction`);
@@ -195,7 +204,11 @@ export async function extractDocumentAction(
           const reused = savedByLabel.get(chunk.label);
           const chunkDrafts =
             reused ??
-            (await extractInterviewChunkWithFallback(chunk, document.fileName));
+            (await extractInterviewChunkWithFallback(
+              chunk,
+              document.fileName,
+              document.intervieweeRole
+            ));
           return { chunkLabel: chunk.label, drafts: chunkDrafts };
         })
       );

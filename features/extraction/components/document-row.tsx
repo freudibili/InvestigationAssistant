@@ -22,20 +22,35 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { StatusBadge } from "@/components/documents/status-badge";
 import { getSupportedExtension } from "@/lib/documents";
-import { useDeleteDocument } from "@/features/documents/hooks/use-documents";
+import {
+  useDeleteDocument,
+  useSetIntervieweeRole,
+} from "@/features/documents/hooks/use-documents";
 import {
   useCancelExtraction,
   useDocumentProgress,
   useExtractDocument,
 } from "@/features/extraction/hooks/use-extraction";
-import type { CaseDocument } from "@/lib/types";
+import {
+  INTERVIEWEE_ROLES,
+  INTERVIEWEE_ROLE_LABELS,
+  type CaseDocument,
+} from "@/lib/types";
 
 export function DocumentRow({ document }: { document: CaseDocument }) {
   const extract = useExtractDocument(document.caseId);
   const cancelExtraction = useCancelExtraction(document.caseId);
   const remove = useDeleteDocument(document.caseId);
+  const setRole = useSetIntervieweeRole(document.caseId);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const progressQuery = useDocumentProgress(
     document.caseId,
@@ -55,8 +70,34 @@ export function DocumentRow({ document }: { document: CaseDocument }) {
         )
       : 8;
   const extractionSteps = getExtractionSteps(liveDocument, isExtracting);
+  const intervieweeRole = liveDocument.intervieweeRole;
+  const canEditRole =
+    !isExtracting &&
+    !isStartingExtraction &&
+    liveDocument.status !== "extracted" &&
+    !setRole.isPending;
+
+  async function handleRoleChange(value: string) {
+    try {
+      await setRole.mutateAsync({
+        documentId: document.id,
+        intervieweeRole: value as (typeof INTERVIEWEE_ROLES)[number],
+      });
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Could not set the role."
+      );
+    }
+  }
 
   async function handleExtract() {
+    if (!intervieweeRole) {
+      toast.error(
+        "Select the interviewee's role (claimant, accused, or reference person) first."
+      );
+      return;
+    }
+
     try {
       await extract.mutateAsync(document.id);
       toast.success("Extraction complete.");
@@ -106,8 +147,29 @@ export function DocumentRow({ document }: { document: CaseDocument }) {
           <FileText className="text-muted-foreground size-5 shrink-0" />
           <div className="min-w-0">
             <p className="truncate text-sm font-medium">{document.fileName}</p>
-            <div className="mt-1">
+            <div className="mt-1 flex flex-wrap items-center gap-2">
               <StatusBadge status={liveDocument.status} />
+              <Select
+                value={intervieweeRole ?? undefined}
+                onValueChange={handleRoleChange}
+                disabled={!canEditRole}
+              >
+                <SelectTrigger
+                  size="sm"
+                  className="h-7 w-[170px]"
+                  aria-label="Interviewee role"
+                  aria-invalid={!intervieweeRole}
+                >
+                  <SelectValue placeholder="Set role…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {INTERVIEWEE_ROLES.map((role) => (
+                    <SelectItem key={role} value={role}>
+                      {INTERVIEWEE_ROLE_LABELS[role]}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
           </div>
         </div>
@@ -150,7 +212,12 @@ export function DocumentRow({ document }: { document: CaseDocument }) {
             <Button
               size="sm"
               onClick={handleExtract}
-              disabled={isStartingExtraction}
+              disabled={isStartingExtraction || !intervieweeRole}
+              title={
+                !intervieweeRole
+                  ? "Select the interviewee's role before extracting."
+                  : undefined
+              }
             >
               {isStartingExtraction ? (
                 <Loader2 className="animate-spin" />

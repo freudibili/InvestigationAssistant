@@ -6,8 +6,16 @@ import { isSupportedDocument, SUPPORTED_LABEL } from "@/lib/documents";
 import {
   createDocumentFromUpload,
   deleteDocument,
+  setIntervieweeRole,
 } from "@/lib/db/documents";
-import type { CaseDocument } from "@/lib/types";
+import { INTERVIEWEE_ROLES, type CaseDocument, type IntervieweeRole } from "@/lib/types";
+
+/** Narrow an untrusted form value to a valid interviewee role, or null. */
+function parseIntervieweeRole(value: FormDataEntryValue | null): IntervieweeRole | null {
+  return INTERVIEWEE_ROLES.includes(value as IntervieweeRole)
+    ? (value as IntervieweeRole)
+    : null;
+}
 
 const MAX_FILE_BYTES = 20 * 1024 * 1024; // 20 MB
 
@@ -21,6 +29,7 @@ export async function uploadDocumentAction(
 ): Promise<CaseDocument> {
   const caseId = formData.get("caseId");
   const file = formData.get("file");
+  const intervieweeRole = parseIntervieweeRole(formData.get("intervieweeRole"));
 
   if (typeof caseId !== "string" || !caseId) {
     throw new Error("Missing case id.");
@@ -52,9 +61,29 @@ export async function uploadDocumentAction(
     fileName: file.name,
     fileBytes: bytes,
     rawText,
+    intervieweeRole,
   });
 
   revalidatePath(`/cases/${caseId}`);
+  return document;
+}
+
+/**
+ * Set or correct a document's interviewee party role (claimant / accused /
+ * witness). Allowed any time before extraction so the investigator can fix a
+ * role chosen at upload, or tag a document uploaded before roles existed.
+ */
+export async function setIntervieweeRoleAction(
+  documentId: string,
+  intervieweeRole: IntervieweeRole
+): Promise<CaseDocument> {
+  if (!INTERVIEWEE_ROLES.includes(intervieweeRole)) {
+    throw new Error("Invalid interviewee role.");
+  }
+
+  const document = await setIntervieweeRole(documentId, intervieweeRole);
+  revalidatePath(`/cases/${document.caseId}`);
+  revalidatePath(`/cases/${document.caseId}/extraction`);
   return document;
 }
 
