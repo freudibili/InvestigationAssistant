@@ -117,21 +117,23 @@ export function buildDocumentQuotes(
     const provenance = isClickableQuoteProvenance(quote.provenance)
       ? quote.provenance
       : null;
+    if (!provenance) continue;
+
     seq += 1;
     seen.set(key, {
       id: `q${docIndex}_${seq}`,
-      provenanceId: provenance?.id ?? null,
+      provenanceId: provenance.id,
       text,
       speaker: quote.speaker?.trim() || null,
       intervieweeName: data.intervieweeName?.trim() || document.fileName,
       intervieweeRole: document.intervieweeRole,
-      page: provenance?.pageNumber ?? null,
-      charStart: provenance?.charStart ?? null,
-      charEnd: provenance?.charEnd ?? null,
-      pageCharStart: provenance?.pageCharStart ?? null,
-      pageCharEnd: provenance?.pageCharEnd ?? null,
-      normalizedPageCharStart: provenance?.normalizedPageCharStart ?? null,
-      normalizedPageCharEnd: provenance?.normalizedPageCharEnd ?? null,
+      page: provenance.pageNumber,
+      charStart: provenance.charStart,
+      charEnd: provenance.charEnd,
+      pageCharStart: provenance.pageCharStart,
+      pageCharEnd: provenance.pageCharEnd,
+      normalizedPageCharStart: provenance.normalizedPageCharStart,
+      normalizedPageCharEnd: provenance.normalizedPageCharEnd,
       documentId: document.id,
       documentName,
     });

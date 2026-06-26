@@ -49,15 +49,19 @@ export function useAnalyzeCase(caseId: string) {
     },
     onMutate: async () => {
       await queryClient.cancelQueries({ queryKey: queryKeys.analysis(caseId) });
+      const previousAnalysisState =
+        queryClient.getQueryData<CaseAnalysisResponse>(queryKeys.analysis(caseId));
 
       queryClient.setQueryData<CaseAnalysisResponse>(
         queryKeys.analysis(caseId),
-        (current) => ({
+        () => ({
           status: "analyzing",
-          generatedAt: current?.generatedAt ?? null,
-          analysis: current?.analysis ?? null,
+          generatedAt: null,
+          analysis: null,
         })
       );
+
+      return { previousAnalysisState };
     },
     onSuccess: (analysis) => {
       queryClient.setQueryData<CaseAnalysisResponse>(
@@ -69,7 +73,7 @@ export function useAnalyzeCase(caseId: string) {
         }
       );
     },
-    onError: (error) => {
+    onError: (error, _variables, context) => {
       queryClient.setQueryData<CaseAnalysisResponse>(
         queryKeys.analysis(caseId),
         (current) => {
@@ -89,8 +93,14 @@ export function useAnalyzeCase(caseId: string) {
 
           return {
             status,
-            generatedAt: current?.generatedAt ?? null,
-            analysis: current?.analysis ?? null,
+            generatedAt:
+              context?.previousAnalysisState?.generatedAt ??
+              current?.generatedAt ??
+              null,
+            analysis:
+              context?.previousAnalysisState?.analysis ??
+              current?.analysis ??
+              null,
           };
         }
       );

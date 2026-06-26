@@ -1,37 +1,44 @@
 "use client";
 
+import Link from "next/link";
 import { useMemo } from "react";
 import {
+  ArrowRight,
   CalendarClock,
   FileText,
   Gavel,
   HelpCircle,
-  UserSearch,
   Users,
 } from "lucide-react";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
   SourceViewerProvider,
   useSourceViewer,
 } from "@/components/pdf/source-viewer-dialog";
-import { INTERVIEWEE_ROLE_LABELS } from "@/lib/types";
 import type {
   InvestigationAnalysis,
+  Party,
   QuoteRef,
   Reproche,
   ReprocheStatement,
 } from "@/features/investigation-analysis/types";
 
-/** Lookup helpers resolving the model's id references back to evidence. */
 interface Lookups {
-  quoteById: Map<string, QuoteRef>;
   interviewNameById: Map<string, string>;
-  reprocheTitleById: Map<string, string>;
+  quoteById: Map<string, QuoteRef>;
 }
 
-/** Badge variant per verdict — supported reads strong, unproven reads muted. */
+const MAIN_PARTY_ROLE_LABELS: Record<Party["caseRole"], string> = {
+  claimant: "Claimant",
+  accused: "Accused",
+  reference_person: "Reference person",
+  witness: "Witness",
+  investigator: "Investigator",
+};
+
 function verdictVariant(
   verdict: string
 ): "default" | "secondary" | "outline" | "destructive" {
@@ -48,25 +55,30 @@ function verdictVariant(
 }
 
 export function AnalysisDashboard({
+  caseId,
   analysis,
 }: {
+  caseId: string;
   analysis: InvestigationAnalysis;
 }) {
   return (
     <SourceViewerProvider>
-      <DashboardBody analysis={analysis} />
+      <DashboardBody caseId={caseId} analysis={analysis} />
     </SourceViewerProvider>
   );
 }
 
-function DashboardBody({ analysis }: { analysis: InvestigationAnalysis }) {
+function DashboardBody({
+  caseId,
+  analysis,
+}: {
+  caseId: string;
+  analysis: InvestigationAnalysis;
+}) {
   const lookups = useMemo<Lookups>(
     () => ({
-      quoteById: new Map(analysis.quotes.map((q) => [q.id, q])),
       interviewNameById: new Map(analysis.interviews.map((i) => [i.id, i.name])),
-      reprocheTitleById: new Map(
-        analysis.reproches.map((r) => [r.id, r.title])
-      ),
+      quoteById: new Map(analysis.quotes.map((quote) => [quote.id, quote])),
     }),
     [analysis]
   );
@@ -81,9 +93,15 @@ function DashboardBody({ analysis }: { analysis: InvestigationAnalysis }) {
         ) : (
           <div className="flex flex-wrap gap-2">
             {analysis.mainParties.map((party) => (
-              <Badge key={party.name} variant="outline" className="gap-1.5 py-1">
-                <span className="font-medium">{party.name}</span>
-                <span className="text-muted-foreground">· {party.role}</span>
+              <Badge
+                key={party.personId}
+                variant="outline"
+                className="gap-1.5 py-1"
+              >
+                <span className="font-medium">{party.canonicalName}</span>
+                <span className="text-muted-foreground">
+                  · {mainPartyLabel(party)}
+                </span>
               </Badge>
             ))}
           </div>
@@ -101,6 +119,7 @@ function DashboardBody({ analysis }: { analysis: InvestigationAnalysis }) {
             {analysis.reproches.map((reproche) => (
               <ReprocheCard
                 key={reproche.id}
+                caseId={caseId}
                 reproche={reproche}
                 lookups={lookups}
               />
@@ -125,46 +144,21 @@ function DashboardBody({ analysis }: { analysis: InvestigationAnalysis }) {
         icon={CalendarClock}
         title={`Timeline (${analysis.timeline.length})`}
       >
-        {analysis.timeline.length === 0 ? (
-          <Empty>No dated events.</Empty>
-        ) : (
-          <ol className="border-muted space-y-3 border-l pl-4">
-            {analysis.timeline.map((event) => (
-              <li key={event.id} className="space-y-1">
-                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                  {event.date ?? "Undated"}
-                </p>
-                <p className="text-sm">{event.description}</p>
-                {event.participants.length > 0 ? (
-                  <p className="text-muted-foreground text-xs">
-                    {event.participants.join(", ")}
-                  </p>
-                ) : null}
-              </li>
-            ))}
-          </ol>
-        )}
+        <Button asChild variant="outline">
+          <Link href={`/cases/${caseId}/analysis/timeline`}>
+            View all timeline
+            <ArrowRight />
+          </Link>
+        </Button>
       </Section>
 
-      <PeopleSection analysis={analysis} lookups={lookups} />
-
       <Section icon={Users} title={`Witnesses (${analysis.witnesses.length})`}>
-        {analysis.witnesses.length === 0 ? (
-          <Empty>No witnesses identified.</Empty>
-        ) : (
-          <div className="space-y-2">
-            {analysis.witnesses.map((witness) => (
-              <div key={witness.name} className="rounded-lg border p-3">
-                <p className="text-sm font-medium">{witness.name}</p>
-                {witness.whyTheyMatter ? (
-                  <p className="text-muted-foreground text-sm">
-                    {witness.whyTheyMatter}
-                  </p>
-                ) : null}
-              </div>
-            ))}
-          </div>
-        )}
+        <Button asChild variant="outline">
+          <Link href={`/cases/${caseId}/analysis/witnesses`}>
+            View all witnesses
+            <ArrowRight />
+          </Link>
+        </Button>
       </Section>
 
       <Section icon={HelpCircle} title="Evidence gaps">
@@ -187,15 +181,12 @@ function DashboardBody({ analysis }: { analysis: InvestigationAnalysis }) {
   );
 }
 
-/**
- * One grievance, triangulated across the parties — the report's Section 5 unit.
- * Renders the claimant's, accused's, and each reference person's account (each
- * with clickable quotes), then a findings/evaluation block reaching a verdict.
- */
 function ReprocheCard({
+  caseId,
   reproche,
   lookups,
 }: {
+  caseId: string;
   reproche: Reproche;
   lookups: Lookups;
 }) {
@@ -219,11 +210,13 @@ function ReprocheCard({
         <div className="space-y-2">
           <StatementBlock
             label="Claimant"
+            caseId={caseId}
             statement={reproche.claimantStatement}
             lookups={lookups}
           />
           <StatementBlock
             label="Accused"
+            caseId={caseId}
             statement={reproche.accusedStatement}
             lookups={lookups}
           />
@@ -231,6 +224,7 @@ function ReprocheCard({
             <StatementBlock
               key={index}
               label={`Reference person ${index + 1}`}
+              caseId={caseId}
               statement={statement}
               lookups={lookups}
             />
@@ -263,25 +257,30 @@ function ReprocheCard({
   );
 }
 
-/**
- * One party's account within a grievance. Labelled with the role and (when the
- * party was interviewed) the interviewee's name. A role with no interview on
- * record still renders, so a missing account reads as a visible gap.
- */
 function StatementBlock({
   label,
+  caseId,
   statement,
   lookups,
 }: {
   label: string;
+  caseId: string;
   statement: ReprocheStatement;
   lookups: Lookups;
 }) {
   const name = statement.interviewId
     ? lookups.interviewNameById.get(statement.interviewId)
     : null;
-  const hasContent =
-    Boolean(statement.summary) || statement.quoteIds.length > 0;
+  const quotes = statement.quoteIds
+    .map((quoteId) => lookups.quoteById.get(quoteId))
+    .filter((quote): quote is QuoteRef =>
+      Boolean(
+        quote &&
+          quote.documentId === statement.interviewId &&
+          quote.provenanceId &&
+          quote.page
+      )
+    );
 
   return (
     <div className="rounded-md border-l-2 border-muted pl-3 py-1">
@@ -290,109 +289,127 @@ function StatementBlock({
         {name ? ` — ${name}` : ""}
       </p>
       {statement.summary ? (
-        <p className="mt-1 text-sm">{statement.summary}</p>
-      ) : !hasContent ? (
+        <p className="mt-1 text-sm">
+          <InlineEvidenceText
+            caseId={caseId}
+            text={statement.summary}
+            quotes={quotes}
+          />
+        </p>
+      ) : (
         <p className="mt-1 text-sm italic text-muted-foreground">
           No account on record.
         </p>
-      ) : null}
-      {statement.quoteIds.length > 0 ? (
-        <div className="mt-1.5">
-          <QuoteList
-            label="Evidence"
-            quoteIds={statement.quoteIds}
-            lookups={lookups}
-          />
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-/**
- * People — one investigation dossier per person, linking them to the grievances
- * naming them and the quotes they spoke (clickable). People who are only
- * name-dropped (no grievances or quotes) are tucked behind a disclosure so the
- * section stays scannable on large cases.
- */
-function PeopleSection({
-  analysis,
-  lookups,
-}: {
-  analysis: InvestigationAnalysis;
-  lookups: Lookups;
-}) {
-  const withSignal = analysis.people.filter(
-    (person) =>
-      person.relatedReprocheIds.length > 0 ||
-      person.supportingQuoteIds.length > 0
-  );
-  const mentionOnly = analysis.people.filter(
-    (person) =>
-      person.relatedReprocheIds.length === 0 &&
-      person.supportingQuoteIds.length === 0
-  );
-
-  return (
-    <Section icon={UserSearch} title={`People (${analysis.people.length})`}>
-      {analysis.people.length === 0 ? (
-        <Empty>No people identified.</Empty>
-      ) : (
-        <div className="space-y-2">
-          {withSignal.map((person) => (
-            <PersonProfile
-              key={person.name}
-              person={person}
-              lookups={lookups}
-            />
-          ))}
-          {mentionOnly.length > 0 ? (
-            <details className="rounded-lg border p-3">
-              <summary className="text-muted-foreground cursor-pointer text-sm">
-                {mentionOnly.length} other mentioned{" "}
-                {mentionOnly.length === 1 ? "person" : "people"}
-              </summary>
-              <p className="mt-2 text-sm">
-                {mentionOnly.map((person) => person.name).join(", ")}
-              </p>
-            </details>
-          ) : null}
-        </div>
       )}
-    </Section>
+    </div>
   );
 }
 
-function PersonProfile({
-  person,
-  lookups,
+function InlineEvidenceText({
+  caseId,
+  text,
+  quotes,
 }: {
-  person: InvestigationAnalysis["people"][number];
-  lookups: Lookups;
+  caseId: string;
+  text: string;
+  quotes: QuoteRef[];
 }) {
-  const reprocheTitles = person.relatedReprocheIds
-    .map((id) => lookups.reprocheTitleById.get(id))
-    .filter((title): title is string => Boolean(title));
+  const openViewer = useSourceViewer();
+  const segments = buildInlineEvidenceSegments(text, quotes);
 
   return (
-    <div className="space-y-2 rounded-lg border p-3">
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <p className="text-sm font-medium">{person.name}</p>
-        <p className="text-muted-foreground text-xs">
-          Mentioned in {person.interviewIds.length} interview
-          {person.interviewIds.length === 1 ? "" : "s"}
-        </p>
-      </div>
-      {reprocheTitles.length > 0 ? (
-        <PartyLine label="Related grievances" names={reprocheTitles} />
-      ) : null}
-      <QuoteList
-        label="Supporting quotes"
-        quoteIds={person.supportingQuoteIds}
-        lookups={lookups}
-      />
-    </div>
+    <>
+      {segments.map((segment, index) =>
+        typeof segment === "string" ? (
+          <span key={index}>{segment}</span>
+        ) : (
+          <button
+            key={index}
+            type="button"
+            onClick={() =>
+              openViewer?.({
+                caseId,
+                documentId: segment.quote.documentId,
+                documentName: segment.quote.documentName,
+                label: `Page ${segment.quote.page}`,
+                page: segment.quote.page as number,
+                quoteId: segment.quote.provenanceId ?? undefined,
+                charStart: segment.quote.charStart,
+                charEnd: segment.quote.charEnd,
+                pageCharStart: segment.quote.pageCharStart,
+                pageCharEnd: segment.quote.pageCharEnd,
+                normalizedPageCharStart: segment.quote.normalizedPageCharStart,
+                normalizedPageCharEnd: segment.quote.normalizedPageCharEnd,
+                quote: segment.quote.text,
+              })
+            }
+            className="rounded-sm bg-muted px-1 italic underline decoration-muted-foreground/50 underline-offset-2 hover:bg-muted/70 hover:decoration-foreground"
+          >
+            “{segment.fragment}”
+          </button>
+        )
+      )}
+    </>
   );
+}
+
+type InlineEvidenceSegment =
+  | string
+  | {
+      fragment: string;
+      quote: QuoteRef;
+    };
+
+function buildInlineEvidenceSegments(
+  text: string,
+  quotes: QuoteRef[]
+): InlineEvidenceSegment[] {
+  const segments: InlineEvidenceSegment[] = [];
+  const pattern = /“([^”]{1,120})”|"([^"]{1,120})"/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = pattern.exec(text)) !== null) {
+    const fragment = match[1] ?? match[2] ?? "";
+    const quote = findQuoteForFragment(fragment, quotes);
+
+    if (match.index > lastIndex) {
+      segments.push(text.slice(lastIndex, match.index));
+    }
+
+    segments.push(quote ? { fragment, quote } : fragment);
+    lastIndex = pattern.lastIndex;
+  }
+
+  if (lastIndex < text.length) {
+    segments.push(text.slice(lastIndex));
+  }
+
+  return segments.length > 0 ? segments : [text];
+}
+
+function findQuoteForFragment(
+  fragment: string,
+  quotes: QuoteRef[]
+): QuoteRef | null {
+  const normalizedFragment = normalizeInlineQuote(fragment);
+  if (normalizedFragment.length < 2) return null;
+
+  return (
+    quotes.find((quote) =>
+      normalizeInlineQuote(quote.text).includes(normalizedFragment)
+    ) ?? null
+  );
+}
+
+function normalizeInlineQuote(value: string): string {
+  return value.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function mainPartyLabel(party: Party): string {
+  return [MAIN_PARTY_ROLE_LABELS[party.caseRole], party.jobRole]
+    .filter(Boolean)
+    .join(" / ");
 }
 
 function SummaryHeader({ analysis }: { analysis: InvestigationAnalysis }) {
@@ -446,16 +463,6 @@ function Section({
   );
 }
 
-function PartyLine({ label, names }: { label: string; names: string[] }) {
-  if (names.length === 0) return null;
-  return (
-    <p className="text-sm">
-      <span className="text-muted-foreground">{label}: </span>
-      {names.join(", ")}
-    </p>
-  );
-}
-
 function BulletList({ label, items }: { label: string; items: string[] }) {
   return (
     <div>
@@ -472,104 +479,6 @@ function BulletList({ label, items }: { label: string; items: string[] }) {
         </ul>
       )}
     </div>
-  );
-}
-
-function QuoteList({
-  label,
-  quoteIds,
-  lookups,
-}: {
-  label: string;
-  quoteIds: string[];
-  lookups: Lookups;
-}) {
-  const quotes = quoteIds
-    .map((id) => lookups.quoteById.get(id))
-    .filter((quote): quote is QuoteRef => Boolean(quote));
-
-  if (quotes.length === 0) return null;
-
-  return (
-    <div className="space-y-1.5">
-      <p className="text-muted-foreground text-xs font-medium uppercase tracking-wide">
-        {label}
-      </p>
-      <div className="space-y-1.5">
-        {quotes.map((quote) => (
-          <QuoteChip key={quote.id} quote={quote} />
-        ))}
-      </div>
-    </div>
-  );
-}
-
-/**
- * A verbatim quote rendered as evidence. When the quote carries a real page it
- * is clickable and opens the cited PDF page with the text highlighted; without a
- * page it stays as plain, non-clickable text rather than a dead link.
- */
-function QuoteChip({ quote }: { quote: QuoteRef }) {
-  const openSource = useSourceViewer();
-  const clickable = openSource !== null && quote.page !== null;
-  const roleLabel = quote.intervieweeRole
-    ? INTERVIEWEE_ROLE_LABELS[quote.intervieweeRole]
-    : null;
-  const sourceLabel = [
-    quote.intervieweeName ?? quote.documentName,
-    roleLabel,
-    quote.page !== null ? `Page ${quote.page}` : null,
-  ]
-    .filter(Boolean)
-    .join(" · ");
-
-  const body = (
-    <span className="block space-y-1.5">
-      <span className="block text-sm">
-        <span className="text-muted-foreground">“</span>
-        {quote.text}
-        <span className="text-muted-foreground">”</span>
-        <span className="text-muted-foreground ml-1 text-xs">
-          — {quote.speaker ?? "Unknown"}
-        </span>
-      </span>
-      <Badge
-        variant={clickable ? "secondary" : "outline"}
-        className="gap-1 text-xs font-normal"
-      >
-        <FileText className="size-3" />
-        {sourceLabel}
-      </Badge>
-    </span>
-  );
-
-  if (!clickable) {
-    return <div className="rounded-md border-l-2 border-muted pl-2">{body}</div>;
-  }
-
-  return (
-    <button
-      type="button"
-      onClick={() =>
-        openSource({
-          documentId: quote.documentId,
-          documentName: quote.documentName,
-          label: `Page ${quote.page}`,
-          page: quote.page as number,
-          quoteId: quote.provenanceId ?? undefined,
-          charStart: quote.charStart,
-          charEnd: quote.charEnd,
-          pageCharStart: quote.pageCharStart,
-          pageCharEnd: quote.pageCharEnd,
-          normalizedPageCharStart: quote.normalizedPageCharStart,
-          normalizedPageCharEnd: quote.normalizedPageCharEnd,
-          quote: quote.text,
-        })
-      }
-      className="hover:border-foreground block w-full rounded-md border-l-2 border-muted pl-2 text-left transition-colors"
-    >
-      {body}
-    </button>
   );
 }
 

@@ -6,6 +6,7 @@ import {
   Circle,
   Database,
   FileCheck2,
+  Play,
   Loader2,
   RotateCcw,
   Sparkles,
@@ -79,15 +80,21 @@ export function AnalysisPanel({
 
   const status = data?.status ?? "idle";
   const analysis = data?.analysis ?? null;
+  const isCanceled = status === "canceled";
   const isRunning =
-    status === "analyzing" || (analyze.isPending && status !== "canceled");
+    status === "analyzing" || (analyze.isPending && !isCanceled);
   const isCanceling = cancelAnalysis.isPending;
   const canRun = extractedCount > 0 && !isRunning && !isCanceling;
+  const visibleAnalysis = isRunning ? null : analysis;
 
   async function run() {
     try {
       await analyze.mutateAsync();
-      toast.success("Investigation analysis complete.");
+      toast.success(
+        analysis
+          ? "Investigation analysis updated."
+          : "Investigation analysis complete."
+      );
     } catch (error) {
       if (
         error instanceof Error &&
@@ -141,21 +148,20 @@ export function AnalysisPanel({
               {isCanceling ? "Canceling..." : "Cancel"}
             </Button>
           ) : null}
-          <Button onClick={run} disabled={!canRun}>
+          <Button
+            variant={isCanceled ? "outline" : "default"}
+            onClick={run}
+            disabled={!canRun}
+          >
             {isRunning ? (
               <>
                 <Loader2 className="animate-spin" />
                 Analyzing…
               </>
-            ) : status === "canceled" ? (
+            ) : isCanceled || analysis ? (
               <>
                 <RotateCcw />
-                Resume analysis
-              </>
-            ) : analysis ? (
-              <>
-                <RotateCcw />
-                Re-run analysis
+                Re-analyse
               </>
             ) : (
               <>
@@ -164,6 +170,12 @@ export function AnalysisPanel({
               </>
             )}
           </Button>
+          {isCanceled && !isRunning ? (
+            <Button onClick={run} disabled={!canRun}>
+              <Play />
+              Resume analysis
+            </Button>
+          ) : null}
         </div>
       </div>
 
@@ -183,12 +195,12 @@ export function AnalysisPanel({
 
       <AnalysisSteps
         extractedCount={extractedCount}
-        hasAnalysis={Boolean(analysis)}
+        hasAnalysis={Boolean(visibleAnalysis)}
         isRunning={isRunning}
       />
 
-      {analysis ? (
-        <AnalysisDashboard analysis={analysis} />
+      {visibleAnalysis ? (
+        <AnalysisDashboard caseId={caseId} analysis={visibleAnalysis} />
       ) : isRunning ? (
         <p className="text-muted-foreground rounded-lg border border-dashed p-8 text-center text-sm">
           Analyzing interviews… this can take a moment.
@@ -211,7 +223,7 @@ function AnalysisSteps({
   hasAnalysis: boolean;
   isRunning: boolean;
 }) {
-  const activeIndex = isRunning ? 2 : -1;
+  const activeIndex = isRunning ? 0 : -1;
 
   return (
     <section className="rounded-lg border bg-card p-4">

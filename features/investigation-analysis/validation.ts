@@ -148,9 +148,19 @@ export type AnalysisResponse = z.infer<typeof analysisResponseSchema>;
 // ---------------------------------------------------------------------------
 
 const partySchema = z.object({
-  name: z.string(),
-  role: z.string(),
-  interviewIds: stringArray,
+  personId: z.string(),
+  canonicalName: z.string(),
+  caseRole: z.enum([
+    "claimant",
+    "accused",
+    "reference_person",
+    "witness",
+    "investigator",
+  ]),
+  jobRole: z.string().nullable().default(null),
+  interviewDocumentId: z.string(),
+  interviewDocumentName: z.string(),
+  aliases: stringArray,
 });
 
 /** Persisted reproche shape == the AI shape (statements reference ids the dashboard resolves). */

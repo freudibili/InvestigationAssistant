@@ -7,6 +7,7 @@ import {
   Circle,
   FileText,
   Loader2,
+  RotateCcw,
   Sparkles,
   StopCircle,
   Trash2,
@@ -190,7 +191,7 @@ export function DocumentRow({ document }: { document: CaseDocument }) {
                 onClick={handleExtract}
                 disabled={isExtracting || isStartingExtraction}
               >
-                <Sparkles />
+                <RotateCcw />
                 Re-extract
               </Button>
             </>

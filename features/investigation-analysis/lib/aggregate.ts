@@ -52,6 +52,9 @@ export interface AiQuote {
   text: string;
 }
 
+type MainPartyCaseRole = Party["caseRole"];
+type ExtractedData = NonNullable<CaseDocument["extractedData"]>;
+
 export interface AggregateResult {
   interviews: InterviewRef[];
   quotes: QuoteRef[];
@@ -88,23 +91,14 @@ export function buildAggregate(documents: CaseDocument[]): AggregateResult {
   const aiEvents: { id: string; date: string | null; description: string }[] = [];
   const eventEntries: EventEntry[] = [];
 
-  // People registry: normalized name → display name + the interviews mentioning
-  // them + claimant/accused tallies (for main-party roles).
   const people = new Map<
     string,
     {
       display: string;
       interviewIds: Set<string>;
-      claimant: number;
-      accused: number;
-      mentions: number;
     }
   >();
-  const registerPerson = (
-    rawName: string,
-    interviewId: string,
-    kind: "claimant" | "accused" | "mention"
-  ) => {
+  const registerPerson = (rawName: string, interviewId: string) => {
     const name = rawName?.trim();
     if (!name) return;
     const key = normalizeText(name);
@@ -113,15 +107,9 @@ export function buildAggregate(documents: CaseDocument[]): AggregateResult {
     const entry = existing ?? {
       display: name,
       interviewIds: new Set<string>(),
-      claimant: 0,
-      accused: 0,
-      mentions: 0,
     };
     if (name.length > entry.display.length) entry.display = name;
     entry.interviewIds.add(interviewId);
-    if (kind === "claimant") entry.claimant += 1;
-    else if (kind === "accused") entry.accused += 1;
-    else entry.mentions += 1;
     people.set(key, entry);
   };
 
@@ -152,13 +140,13 @@ export function buildAggregate(documents: CaseDocument[]): AggregateResult {
 
     // People.
     for (const person of data.peopleMentioned ?? []) {
-      registerPerson(person, id, "mention");
+      registerPerson(person, id);
     }
     for (const person of data.investigationScope?.primaryClaimants ?? []) {
-      registerPerson(person, id, "claimant");
+      registerPerson(person, id);
     }
     for (const person of data.investigationScope?.primaryAccused ?? []) {
-      registerPerson(person, id, "accused");
+      registerPerson(person, id);
     }
 
     // Allegations (raw count for the summary).
@@ -254,7 +242,7 @@ export function buildAggregate(documents: CaseDocument[]): AggregateResult {
   const timeline = buildTimeline(eventEntries, documents);
   const eventIdsByPerson = indexEventsByPerson(timeline);
 
-  const mainParties = buildMainParties(people);
+  const mainParties = buildMainParties(extracted);
 
   const consolidatedWitnesses: ConsolidatedWitness[] = [...witnesses.values()]
     .sort((a, b) => b.priority - a.priority)
@@ -371,49 +359,126 @@ function indexEventsByPerson(timeline: TimelineEvent[]): Map<string, string[]> {
   return index;
 }
 
-function buildMainParties(
-  people: Map<
+function buildMainParties(documents: CaseDocument[]): Party[] {
+  const parties = new Map<
     string,
-    {
-      display: string;
-      interviewIds: Set<string>;
-      claimant: number;
-      accused: number;
-      mentions: number;
+    Party & { aliasesSet: Set<string>; roleRank: number }
+  >();
+
+  for (const document of documents) {
+    if (!document.extractedData || !document.intervieweeRole) continue;
+
+    const caseRole = caseRoleForIntervieweeRole(document.intervieweeRole);
+    const rawIntervieweeName = document.extractedData.intervieweeName?.trim();
+    if (!rawIntervieweeName) continue;
+
+    const identity = findIdentityForName(
+      document.extractedData.canonicalIdentities,
+      rawIntervieweeName
+    );
+    const canonicalName = identity?.canonicalName.trim() || rawIntervieweeName;
+    const key = normalizeText(canonicalName);
+    if (!key) continue;
+
+    const aliases = aliasesForParty(
+      canonicalName,
+      rawIntervieweeName,
+      document.extractedData.canonicalIdentities
+    );
+    const roleRank = mainPartyRoleRank(caseRole);
+    const existing = parties.get(key);
+
+    if (existing) {
+      for (const alias of aliases) existing.aliasesSet.add(alias);
+      if (!existing.jobRole && document.extractedData.role) {
+        existing.jobRole = document.extractedData.role;
+      }
+      if (roleRank < existing.roleRank) existing.caseRole = caseRole;
+      existing.roleRank = Math.min(existing.roleRank, roleRank);
+      continue;
     }
-  >
-): Party[] {
-  const parties: (Party & { score: number; rank: number })[] = [];
 
-  for (const entry of people.values()) {
-    const isClaimant = entry.claimant > 0;
-    const isAccused = entry.accused > 0;
-    const mentionedIn = entry.interviewIds.size;
-    // Keep only people who are a party or are broadly mentioned, so the section
-    // stays scannable rather than listing every name in the case.
-    if (!isClaimant && !isAccused && mentionedIn < 2) continue;
-
-    let role = "Frequently mentioned";
-    let rank = 2;
-    if (isAccused && entry.accused >= entry.claimant) {
-      role = "Subject of allegations";
-      rank = 0;
-    } else if (isClaimant) {
-      role = "Claimant";
-      rank = 1;
-    }
-
-    parties.push({
-      name: entry.display,
-      role,
-      interviewIds: [...entry.interviewIds],
-      score: mentionedIn,
-      rank,
+    parties.set(key, {
+      personId: key,
+      canonicalName,
+      caseRole,
+      jobRole: document.extractedData.role ?? null,
+      interviewDocumentId: document.id,
+      interviewDocumentName: sourceDocumentName(document),
+      aliases,
+      aliasesSet: new Set(aliases),
+      roleRank,
     });
   }
 
-  return parties
-    .sort((a, b) => a.rank - b.rank || b.score - a.score)
-    .slice(0, 12)
-    .map(({ name, role, interviewIds }) => ({ name, role, interviewIds }));
+  return [...parties.values()]
+    .sort((a, b) => a.roleRank - b.roleRank)
+    .slice(0, 8)
+    .map(({ aliasesSet, roleRank, ...party }) => ({
+      ...party,
+      aliases: [...aliasesSet],
+    }));
+}
+
+function caseRoleForIntervieweeRole(
+  role: IntervieweeRole
+): MainPartyCaseRole {
+  if (role === "witness") return "reference_person";
+  return role;
+}
+
+function mainPartyRoleRank(role: MainPartyCaseRole): number {
+  switch (role) {
+    case "claimant":
+      return 0;
+    case "accused":
+      return 1;
+    case "reference_person":
+      return 2;
+    case "witness":
+      return 3;
+    case "investigator":
+      return 4;
+  }
+}
+
+function findIdentityForName(
+  identities: ExtractedData["canonicalIdentities"],
+  name: string
+) {
+  const key = normalizeText(name);
+
+  return identities.find((identity) => {
+    const names = [identity.canonicalName, ...identity.variants];
+    return names.some((value) => normalizeText(value) === key);
+  });
+}
+
+function aliasesForParty(
+  canonicalName: string,
+  intervieweeName: string,
+  identities: ExtractedData["canonicalIdentities"]
+): string[] {
+  const canonicalKey = normalizeText(canonicalName);
+  const aliases = new Set<string>();
+
+  for (const identity of identities) {
+    const names = [identity.canonicalName, ...identity.variants];
+    if (!names.some((name) => normalizeText(name) === canonicalKey)) continue;
+
+    for (const name of names) addAlias(name, canonicalKey, aliases);
+  }
+
+  addAlias(intervieweeName, canonicalKey, aliases);
+  return [...aliases];
+}
+
+function addAlias(
+  name: string,
+  canonicalKey: string,
+  aliases: Set<string>
+): void {
+  const trimmed = name.trim();
+  if (!trimmed || normalizeText(trimmed) === canonicalKey) return;
+  aliases.add(trimmed);
 }
