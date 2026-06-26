@@ -1,5 +1,10 @@
 import { z } from "zod";
 
+import {
+  reportDraftSchema,
+  reportGenerationStateSchema,
+} from "@/features/report-generation/validation";
+
 /**
  * Schemas for the cross-interview Investigation Analysis.
  *
@@ -310,6 +315,16 @@ export const investigationAnalysisSchema = z.object({
     missingInterviews: [],
     missingEvidence: [],
     missingClarification: [],
+  }),
+  reportDraft: reportDraftSchema.nullable().default(null),
+  reportGeneration: reportGenerationStateSchema.default({
+    status: "idle",
+    runId: null,
+    currentStep: null,
+    currentStepIndex: 0,
+    totalSteps: 6,
+    errorMessage: null,
+    updatedAt: null,
   }),
 });
 

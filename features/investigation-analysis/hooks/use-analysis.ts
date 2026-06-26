@@ -18,6 +18,8 @@ export interface CaseAnalysisResponse {
   analysis: InvestigationAnalysis | null;
 }
 
+const reportGenerationStaleAfterMs = 10 * 60 * 1000;
+
 export function useCaseAnalysis(
   caseId: string,
   initialData?: CaseAnalysisResponse
@@ -28,12 +30,35 @@ export function useCaseAnalysis(
       fetchJson<CaseAnalysisResponse>(`/api/cases/${caseId}/analysis`),
     initialData,
     staleTime: initialData?.status === "ready" ? Infinity : 0,
-    refetchOnMount: (query) => query.state.data?.status === "analyzing",
+    refetchOnMount: (query) =>
+      query.state.data?.status === "analyzing" ||
+      isReportGenerationRunning(query.state.data?.analysis),
     refetchOnWindowFocus: false,
-    // Poll while the analysis is running so the dashboard appears on completion.
+    // Poll while long-running case outputs are running so pages recover after reload.
     refetchInterval: (query) =>
-      query.state.data?.status === "analyzing" ? 2000 : false,
+      query.state.data?.status === "analyzing" ||
+      isReportGenerationRunning(query.state.data?.analysis)
+        ? 2000
+        : false,
   });
+}
+
+function isReportGenerationRunning(
+  analysis: InvestigationAnalysis | null | undefined
+): boolean {
+  return (
+    analysis?.reportGeneration.status === "generating" &&
+    !isStaleReportGeneration(analysis.reportGeneration.updatedAt)
+  );
+}
+
+function isStaleReportGeneration(updatedAt: string | null): boolean {
+  if (!updatedAt) return true;
+
+  const updatedTime = Date.parse(updatedAt);
+  if (Number.isNaN(updatedTime)) return true;
+
+  return Date.now() - updatedTime > reportGenerationStaleAfterMs;
 }
 
 export function useAnalyzeCase(caseId: string) {
