@@ -5,6 +5,7 @@ import {
   reportDraftSchema,
   type ReportDraft,
   type ReportLanguage,
+  type ReportSection,
 } from "@/features/report-generation/validation";
 import type { Case, CaseDocument } from "@/lib/types";
 
@@ -67,8 +68,12 @@ export async function generateReportDraft(
   const globalAssessmentSection = buildGlobalAssessmentSection(analysis, copy);
 
   await options.onStep?.(REPORT_GENERATION_STEPS[3]);
-  const content = [frameworkSections, allegationsSection, globalAssessmentSection]
-    .join("\n\n")
+  const sections = [
+    ...frameworkSections,
+    allegationsSection,
+    globalAssessmentSection,
+  ];
+  const content = renderReportSections(sections)
     .split("\n")
     .map((line) => cleanDashboardOnlyContent(line))
     .join("\n")
@@ -88,110 +93,162 @@ export async function generateReportDraft(
     generatedAt: new Date().toISOString(),
     generatedContent: content,
     editedContent: null,
+    sections,
     coherence: { status: "coherent", issues: [] },
   });
 }
 
 function buildFrameworkSections(
-  input: ReportGenerationInput,
+  _input: ReportGenerationInput,
   copy: ReportCopy
-): string {
-  const { investigationCase, documents, analysis } = input;
-  const extractedDocuments = documents.filter(
-    (document) => document.status === "extracted"
-  );
-  const documentLines = extractedDocuments.map(
-    (document) => `- ${document.fileName}${document.intervieweeRole ? ` (${document.intervieweeRole})` : ""}`
-  );
-  const interviewLines = analysis.interviews.map(
-    (interview) => `- ${interview.name} (${interview.documentName})`
-  );
-  const partyLines = analysis.mainParties.map((party) =>
-    [party.canonicalName, party.caseRole, party.jobRole].filter(Boolean).join(" - ")
-  );
-  const missingLimits = [
-    ...analysis.gaps.missingInterviews,
-    ...analysis.gaps.missingEvidence,
-    ...analysis.gaps.missingClarification,
-  ];
-  const contradictionLines = findContradictionLines(analysis.reproches);
-
+): ReportSection[] {
   return [
-    `1. ${copy.initialSituation}`,
-    paragraph(
-      copy.caseIntro(investigationCase.title, investigationCase.companyName)
-    ),
-    `2. ${copy.factFindingFramework}`,
-    `2.1 ${copy.mandate}`,
-    paragraph(copy.mandatePlaceholder),
-    `2.2 ${copy.procedure}`,
-    paragraph(copy.procedureIntro),
-    documentLines.length > 0
-      ? [copy.documentsUsed, ...documentLines].join("\n")
-      : paragraph(copy.noDocuments),
-    interviewLines.length > 0
-      ? [copy.interviewsUsed, ...interviewLines].join("\n")
-      : "",
-    `2.3 ${copy.investigationLimits}`,
-    paragraph(copy.limitsIntro),
-    missingLimits.length > 0
-      ? [copy.identifiedLimits, ...uniqueStrings(missingLimits).map((item) => `- ${item}`)].join("\n")
-      : paragraph(copy.noAdditionalLimits),
-    `3. ${copy.legalBasis}`,
-    `3.1 ${copy.mobbingBossing}`,
-    paragraph(copy.mobbingDefinition),
-    `3.2 ${copy.contradictoryStatements}`,
-    paragraph(copy.contradictoryDefinition),
-    contradictionLines.length > 0
-      ? [copy.contradictionsIdentified, ...contradictionLines].join("\n")
-      : paragraph(copy.noContradictions),
-    `4. ${copy.companyContext}`,
-    paragraph(copy.company(investigationCase.companyName)),
-    partyLines.length > 0
-      ? [copy.partiesIdentified, ...partyLines.map((line) => `- ${line}`)].join("\n")
-      : paragraph(copy.noParties),
-  ]
-    .filter(Boolean)
-    .join("\n\n");
+    createSection({
+      number: "1",
+      title: copy.initialSituation,
+      type: "manual",
+      source: "caseMetadata",
+      content: "",
+      placeholder: copy.initialSituationPlaceholder,
+    }),
+    createSection({
+      number: "2",
+      title: copy.factFindingFramework,
+      type: "manual",
+      source: "template",
+      content: "",
+      placeholder: copy.factFindingFrameworkPlaceholder,
+      children: [
+        createSection({
+          number: "2.1",
+          title: copy.mandate,
+          type: "manual",
+          source: "template",
+          content: "",
+          placeholder: copy.mandatePlaceholder,
+        }),
+        createSection({
+          number: "2.2",
+          title: copy.procedure,
+          type: "manual",
+          source: "caseMetadata",
+          content: "",
+          placeholder: copy.procedurePlaceholder,
+        }),
+        createSection({
+          number: "2.3",
+          title: copy.investigationLimits,
+          type: "manual",
+          source: "analysis",
+          content: "",
+          placeholder: copy.limitsPlaceholder,
+        }),
+      ],
+    }),
+    createSection({
+      number: "3",
+      title: copy.legalBasis,
+      type: "manual",
+      source: "template",
+      content: "",
+      placeholder: copy.legalBasisPlaceholder,
+      children: [
+        createSection({
+          number: "3.1",
+          title: copy.mobbingBossing,
+          type: "manual",
+          source: "template",
+          content: "",
+          placeholder: copy.mobbingDefinitionPlaceholder,
+        }),
+        createSection({
+          number: "3.2",
+          title: copy.contradictoryStatements,
+          type: "manual",
+          source: "analysis",
+          content: "",
+          placeholder: copy.contradictoryDefinitionPlaceholder,
+        }),
+      ],
+    }),
+    createSection({
+      number: "4",
+      title: copy.companyContext,
+      type: "manual",
+      source: "caseMetadata",
+      content: "",
+      placeholder: copy.companyContextPlaceholder,
+    }),
+  ];
 }
 
 function buildAllegationsSection(
   reproches: Reproche[],
   copy: ReportCopy
-): string {
-  return [
-    `5. ${copy.examinationOfAllegations}`,
-    ...reproches.map((reproche, index) =>
+): ReportSection {
+  return createSection({
+    number: "5",
+    title: copy.examinationOfAllegations,
+    type: "generated",
+    source: "analysis",
+    content: copy.allegationsIntro,
+    children: reproches.map((reproche, index) =>
       buildAllegationSection(reproche, index + 1, copy)
     ),
-  ].join("\n\n");
+  });
 }
 
 function buildAllegationSection(
   reproche: Reproche,
   number: number,
   copy: ReportCopy
-): string {
-  const sections = [
-    `5.${number} ${reproche.title}`,
-    `5.${number}.1 ${copy.claimantDeclaration}`,
-    statementText(reproche.claimantStatement.summary, copy),
-    `5.${number}.2 ${copy.accusedDeclaration}`,
-    statementText(reproche.accusedStatement.summary, copy),
-    ...reproche.referenceStatements.flatMap((statement, index) => [
-      `5.${number}.${index + 3} ${referenceDeclarationTitle(index, copy)}`,
-      statementText(statement.summary, copy),
-    ]),
-  ];
+): ReportSection {
   const findingsIndex = 3 + reproche.referenceStatements.length;
+  const sectionNumber = `5.${number}`;
 
-  return [
-    ...sections,
-    `5.${number}.${findingsIndex} ${copy.findingsAndEvaluation}`,
-    formatFindingsAndEvaluation(reproche),
-  ]
-    .filter(Boolean)
-    .join("\n\n");
+  return createSection({
+    number: sectionNumber,
+    title: reproche.title,
+    type: "generated",
+    source: "analysis",
+    content: allegationDescriptionText(reproche),
+    children: [
+      createSection({
+        number: `${sectionNumber}.1`,
+        title: copy.claimantDeclaration,
+        type: "generated",
+        source: "analysis",
+        content: statementText(reproche.claimantStatement.summary, copy),
+      }),
+      createSection({
+        number: `${sectionNumber}.2`,
+        title: copy.accusedDeclaration,
+        type: "generated",
+        source: "analysis",
+        content: statementText(reproche.accusedStatement.summary, copy),
+      }),
+      ...reproche.referenceStatements.map((statement, index) =>
+        createSection({
+          number: `${sectionNumber}.${index + 3}`,
+          title: referenceDeclarationTitle(index, copy),
+          type: "generated",
+          source: "analysis",
+          content: statementText(statement.summary, copy),
+        })
+      ),
+      createSection({
+        number: `${sectionNumber}.${findingsIndex}`,
+        title: copy.findingsAndEvaluation,
+        type: "generated",
+        source: "analysis",
+        content: formatFindingsAndEvaluation(reproche),
+      }),
+    ],
+  });
+}
+
+function allegationDescriptionText(reproche: Reproche): string {
+  return cleanDashboardOnlyContent(reproche.description).trim();
 }
 
 function referenceDeclarationTitle(index: number, copy: ReportCopy): string {
@@ -222,15 +279,43 @@ function formatFindingsAndEvaluation(reproche: Reproche): string {
 function buildGlobalAssessmentSection(
   analysis: InvestigationAnalysis,
   copy: ReportCopy
-): string {
+): ReportSection {
   const globalAssessment = cleanDashboardOnlyContent(analysis.globalAssessment).trim();
 
-  return [
-    `6. ${copy.globalAssessment}`,
-    globalAssessment
+  return createSection({
+    number: "6",
+    title: copy.globalAssessment,
+    type: "generated",
+    source: "globalAssessment",
+    content: globalAssessment
       ? paragraph(globalAssessment)
       : paragraph(copy.noGlobalAssessment),
-  ].join("\n\n");
+  });
+}
+
+export function renderReportSections(sections: ReportSection[]): string {
+  return sections.map(renderReportSection).filter(Boolean).join("\n\n");
+}
+
+function renderReportSection(section: ReportSection): string {
+  const body = (section.editedContent ?? section.content).trim();
+  const children = section.children?.map(renderReportSection).filter(Boolean) ?? [];
+
+  return [
+    `${section.number} ${section.title}`,
+    body,
+    ...children,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function createSection(params: Omit<ReportSection, "id">): ReportSection {
+  return {
+    ...params,
+    id: `${params.number}-${slugify(params.title)}`,
+    children: params.children ?? [],
+  };
 }
 
 type ReportCopy = {
@@ -244,6 +329,7 @@ type ReportCopy = {
   contradictoryStatements: string;
   companyContext: string;
   examinationOfAllegations: string;
+  allegationsIntro: string;
   globalAssessment: string;
   claimantDeclaration: string;
   accusedDeclaration: string;
@@ -260,13 +346,15 @@ type ReportCopy = {
   noParties: string;
   noAccount: string;
   noGlobalAssessment: string;
+  initialSituationPlaceholder: string;
+  factFindingFrameworkPlaceholder: string;
   mandatePlaceholder: string;
-  procedureIntro: string;
-  limitsIntro: string;
-  mobbingDefinition: string;
-  contradictoryDefinition: string;
-  caseIntro: (title: string, companyName: string) => string;
-  company: (companyName: string) => string;
+  procedurePlaceholder: string;
+  limitsPlaceholder: string;
+  legalBasisPlaceholder: string;
+  mobbingDefinitionPlaceholder: string;
+  contradictoryDefinitionPlaceholder: string;
+  companyContextPlaceholder: string;
   numberedReferenceDeclaration: (index: number) => string;
 };
 
@@ -286,6 +374,8 @@ const englishReportCopy: ReportCopy = {
   contradictoryStatements: "Contradictory statements",
   companyContext: "Company context",
   examinationOfAllegations: "Examination of the allegations",
+  allegationsIntro:
+    "The claimant reported a number of situations considered to illustrate the difficulties encountered with the accused person. The examples presented below are not an exhaustive list of all situations raised during the investigation, but correspond to those considered most representative of the allegations made. All elements communicated were nevertheless taken into account in the overall assessment of the situation.",
   globalAssessment: "Global assessment",
   claimantDeclaration: "Claimant declaration",
   accusedDeclaration: "Accused person declaration",
@@ -302,19 +392,24 @@ const englishReportCopy: ReportCopy = {
   noParties: "No party information is available in the case analysis.",
   noAccount: "No account on record.",
   noGlobalAssessment: "No global assessment is available in the case analysis.",
+  initialSituationPlaceholder:
+    "Complete the initial situation, background, and relevant chronology.",
+  factFindingFrameworkPlaceholder:
+    "Add any general framing needed for the fact-finding process.",
   mandatePlaceholder:
-    "The mandate section is to be completed by the investigator with the formal mandate, date, scope, and mandating person or body.",
-  procedureIntro:
-    "This draft is based on the validated case analysis and the extracted case material available in the file.",
-  limitsIntro:
-    "This draft formats the validated case analysis into a report structure. It does not add facts, allegations, credibility findings, or legal conclusions.",
-  mobbingDefinition:
-    "Mobbing or bossing generally refers to repeated or systematic conduct over time that may affect a person's dignity, work situation, social relations, professional reputation, or health. This section is conceptual and does not establish that such conduct occurred.",
-  contradictoryDefinition:
-    "Where accounts differ, the report distinguishes between what each person states and what the collected elements allow establishing. Unresolved contradictions remain identified as disputed points.",
-  caseIntro: (title, companyName) =>
-    `This draft report concerns the case "${title}" at ${companyName}.`,
-  company: (companyName) => `Company: ${companyName}.`,
+    "Complete the formal mandate, date, scope, and mandating person or body.",
+  procedurePlaceholder:
+    "Describe the investigative steps, reviewed documents, and interviews conducted.",
+  limitsPlaceholder:
+    "Describe the limits of the investigation, unavailable material, or unresolved points.",
+  legalBasisPlaceholder:
+    "Add the applicable legal or internal framework.",
+  mobbingDefinitionPlaceholder:
+    "Add the applicable definition or reference text.",
+  contradictoryDefinitionPlaceholder:
+    "Add the method used to address contradictory statements.",
+  companyContextPlaceholder:
+    "Complete the relevant company context, roles, reporting lines, and organizational background.",
   numberedReferenceDeclaration: (index) => `Reference person declaration ${index}`,
 };
 
@@ -329,6 +424,8 @@ const frenchReportCopy: ReportCopy = {
   contradictoryStatements: "Déclarations contradictoires",
   companyContext: "Contexte de l’entreprise",
   examinationOfAllegations: "Examen des reproches",
+  allegationsIntro:
+    "La personne plaignante a relaté un certain nombre de situations qu’elle considérait comme illustrant les difficultés rencontrées avec la personne mise en cause. Les exemples présentés ci-après ne constituent pas une liste exhaustive des situations évoquées au cours de l’enquête, mais correspondent à celles qui ont été jugées les plus représentatives des reproches formulés. L’ensemble des éléments communiqués a toutefois été pris en considération dans l’appréciation globale de la situation.",
   globalAssessment: "Appréciation globale",
   claimantDeclaration: "Déclaration de la personne plaignante",
   accusedDeclaration: "Déclaration de la personne mise en cause",
@@ -345,19 +442,24 @@ const frenchReportCopy: ReportCopy = {
   noParties: "Aucune information sur les parties n’est disponible dans l’analyse du dossier.",
   noAccount: "Aucune déclaration n’est disponible dans le dossier.",
   noGlobalAssessment: "Aucune appréciation globale n’est disponible dans l’analyse du dossier.",
+  initialSituationPlaceholder:
+    "Compléter la situation initiale, le contexte et la chronologie utile.",
+  factFindingFrameworkPlaceholder:
+    "Ajouter les éléments généraux nécessaires au cadrage de l’établissement des faits.",
   mandatePlaceholder:
-    "La section relative au mandat doit être complétée par l’enquêteur avec le mandat formel, la date, le périmètre et la personne ou l’organe mandant.",
-  procedureIntro:
-    "Ce projet est fondé sur l’analyse validée du dossier et sur les éléments extraits disponibles.",
-  limitsIntro:
-    "Ce projet ne réanalyse pas le dossier. Il place l’analyse validée dans une structure de rapport. Il n’ajoute aucun fait, reproche, élément d’appréciation de crédibilité ou conclusion juridique.",
-  mobbingDefinition:
-    "Le mobbing ou bossing renvoie généralement à des comportements répétés ou systématiques dans la durée, susceptibles d’affecter la dignité, la situation de travail, les relations sociales, la réputation professionnelle ou la santé d’une personne. Cette section est conceptuelle et ne constate pas que de tels comportements sont établis.",
-  contradictoryDefinition:
-    "Lorsque les versions divergent, le rapport distingue ce que chaque personne déclare de ce que les éléments recueillis permettent d’établir. Les contradictions non résolues restent identifiées comme des points disputés.",
-  caseIntro: (title, companyName) =>
-    `Ce projet de rapport concerne le dossier « ${title} » auprès de ${companyName}.`,
-  company: (companyName) => `Entreprise : ${companyName}.`,
+    "Compléter le mandat formel, la date, le périmètre et la personne ou l’organe mandant.",
+  procedurePlaceholder:
+    "Décrire les démarches effectuées, les documents examinés et les entretiens menés.",
+  limitsPlaceholder:
+    "Décrire les limites de l’enquête, les éléments indisponibles ou les points non résolus.",
+  legalBasisPlaceholder:
+    "Ajouter le cadre juridique ou interne applicable.",
+  mobbingDefinitionPlaceholder:
+    "Ajouter la définition applicable ou le texte de référence.",
+  contradictoryDefinitionPlaceholder:
+    "Ajouter la méthode retenue pour traiter les déclarations contradictoires.",
+  companyContextPlaceholder:
+    "Compléter le contexte de l’entreprise, les rôles, les lignes hiérarchiques et les éléments organisationnels utiles.",
   numberedReferenceDeclaration: (index) =>
     `Déclaration de la personne de référence ${index}`,
 };
@@ -373,6 +475,8 @@ const germanReportCopy: ReportCopy = {
   contradictoryStatements: "Widersprüchliche Aussagen",
   companyContext: "Unternehmenskontext",
   examinationOfAllegations: "Prüfung der Vorwürfe",
+  allegationsIntro:
+    "Die beschwerdeführende Person schilderte eine Reihe von Situationen, die aus ihrer Sicht die Schwierigkeiten mit der beschuldigten Person veranschaulichen. Die nachfolgend dargestellten Beispiele bilden keine abschliessende Liste aller im Rahmen der Untersuchung erwähnten Situationen, sondern entsprechen denjenigen Punkten, die als besonders repräsentativ für die erhobenen Vorwürfe beurteilt wurden. Sämtliche mitgeteilten Elemente wurden jedoch in der Gesamtwürdigung der Situation berücksichtigt.",
   globalAssessment: "Gesamtwürdigung",
   claimantDeclaration: "Aussage der beschwerdeführenden Person",
   accusedDeclaration: "Aussage der beschuldigten Person",
@@ -389,19 +493,24 @@ const germanReportCopy: ReportCopy = {
   noParties: "In der Fallanalyse sind keine Angaben zu den Parteien verfügbar.",
   noAccount: "Im Dossier ist keine Aussage verfügbar.",
   noGlobalAssessment: "In der Fallanalyse ist keine Gesamtwürdigung verfügbar.",
+  initialSituationPlaceholder:
+    "Ausgangslage, Hintergrund und relevante Chronologie ergänzen.",
+  factFindingFrameworkPlaceholder:
+    "Allgemeine Angaben zum Rahmen der Sachverhaltsabklärung ergänzen.",
   mandatePlaceholder:
-    "Der Abschnitt zum Mandat ist durch die untersuchende Person mit dem formellen Mandat, dem Datum, dem Umfang sowie der mandatierenden Person oder Stelle zu ergänzen.",
-  procedureIntro:
-    "Dieser Entwurf stützt sich auf die validierte Fallanalyse und die verfügbaren extrahierten Elemente im Dossier.",
-  limitsIntro:
-    "Dieser Entwurf nimmt keine erneute Analyse des Dossiers vor. Er überführt die validierte Analyse in eine Berichtsstruktur. Er fügt keine neuen Tatsachen, Vorwürfe, Glaubwürdigkeitsbewertungen oder rechtlichen Schlussfolgerungen hinzu.",
-  mobbingDefinition:
-    "Mobbing oder Bossing bezeichnet allgemein wiederholte oder systematische Verhaltensweisen über eine gewisse Dauer, die die Würde, Arbeitssituation, sozialen Beziehungen, berufliche Reputation oder Gesundheit einer Person beeinträchtigen können. Dieser Abschnitt ist begrifflich und stellt nicht fest, dass ein solches Verhalten vorliegt.",
-  contradictoryDefinition:
-    "Wenn Aussagen voneinander abweichen, unterscheidet der Bericht zwischen dem, was die einzelnen Personen erklären, und dem, was die erhobenen Elemente feststellen lassen. Nicht aufgelöste Widersprüche bleiben als strittige Punkte ausgewiesen.",
-  caseIntro: (title, companyName) =>
-    `Dieser Berichtsentwurf betrifft das Dossier "${title}" bei ${companyName}.`,
-  company: (companyName) => `Unternehmen: ${companyName}.`,
+    "Formelles Mandat, Datum, Umfang sowie mandatierende Person oder Stelle ergänzen.",
+  procedurePlaceholder:
+    "Durchgeführte Schritte, geprüfte Unterlagen und geführte Gespräche beschreiben.",
+  limitsPlaceholder:
+    "Grenzen der Abklärung, nicht verfügbare Elemente oder offene Punkte beschreiben.",
+  legalBasisPlaceholder:
+    "Anwendbaren rechtlichen oder internen Rahmen ergänzen.",
+  mobbingDefinitionPlaceholder:
+    "Anwendbare Definition oder Referenztext ergänzen.",
+  contradictoryDefinitionPlaceholder:
+    "Methode zum Umgang mit widersprüchlichen Aussagen ergänzen.",
+  companyContextPlaceholder:
+    "Relevanten Unternehmenskontext, Rollen, Berichtslinien und organisatorische Hintergründe ergänzen.",
   numberedReferenceDeclaration: (index) => `Aussage der Referenzperson ${index}`,
 };
 
@@ -493,4 +602,11 @@ function findDashboardOnlyContentIssues(value: string) {
 
 function uniqueStrings(items: string[]): string[] {
   return [...new Set(items.map((item) => item.trim()).filter(Boolean))];
+}
+
+function slugify(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
 }

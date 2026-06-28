@@ -10,6 +10,41 @@ export const reportCoherenceIssueSchema = z.object({
   recommendation: z.string(),
 });
 
+export const reportSectionTypeSchema = z.enum(["manual", "generated", "custom"]);
+
+export const reportSectionSourceSchema = z.enum([
+  "template",
+  "caseMetadata",
+  "analysis",
+  "globalAssessment",
+]);
+
+export type ReportSection = {
+  id: string;
+  number: string;
+  title: string;
+  type: z.infer<typeof reportSectionTypeSchema>;
+  source?: z.infer<typeof reportSectionSourceSchema>;
+  content: string;
+  placeholder?: string;
+  editedContent?: string | null;
+  children?: ReportSection[];
+};
+
+export const reportSectionSchema: z.ZodType<ReportSection> = z.lazy(() =>
+  z.object({
+    id: z.string(),
+    number: z.string(),
+    title: z.string(),
+    type: reportSectionTypeSchema,
+    source: reportSectionSourceSchema.optional(),
+    content: z.string(),
+    placeholder: z.string().optional(),
+    editedContent: z.string().nullable().optional(),
+    children: z.array(reportSectionSchema).default([]),
+  })
+);
+
 export const reportDraftSchema = z.preprocess(
   (value) => {
     if (!value || typeof value !== "object") return value;
@@ -18,6 +53,7 @@ export const reportDraftSchema = z.preprocess(
       content?: unknown;
       generatedContent?: unknown;
       editedContent?: unknown;
+      sections?: unknown;
     };
 
     if (typeof draft.generatedContent === "string") return value;
@@ -34,6 +70,7 @@ export const reportDraftSchema = z.preprocess(
     generatedAt: z.string(),
     generatedContent: z.string(),
     editedContent: z.string().nullable().default(null),
+    sections: z.array(reportSectionSchema).default([]),
     coherence: z.object({
       status: z.enum(["coherent", "issues_found"]),
       issues: z.array(reportCoherenceIssueSchema).default([]),

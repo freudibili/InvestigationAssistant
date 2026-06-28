@@ -21,6 +21,7 @@ import {
 import type {
   ReportDraft,
   ReportLanguage,
+  ReportSection,
   reportCoherenceIssueSchema,
 } from "@/features/report-generation/validation";
 
@@ -118,10 +119,10 @@ export async function generateReportDraftAction(
 
 export async function saveEditedReportDraftAction(
   caseId: string,
-  editedContent: string
+  editedDraft: string | ReportSection[]
 ): Promise<SaveEditedReportResult> {
   try {
-    const analysis = await saveEditedReportDraft(caseId, editedContent);
+    const analysis = await saveEditedReportDraft(caseId, editedDraft);
     revalidatePath(`/cases/${caseId}/report`);
     return { ok: true, analysis };
   } catch (error) {
