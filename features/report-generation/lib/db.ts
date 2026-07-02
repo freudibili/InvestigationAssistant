@@ -19,18 +19,17 @@ import { getSupabaseAdmin } from "@/lib/supabase/admin";
 
 export async function saveReportDraft(
   caseId: string,
+  runId: string,
   reportDraft: ReportDraft
 ): Promise<InvestigationAnalysis> {
   const current = await getCaseAnalysis(caseId);
 
-  if (!current.analysis) {
-    throw new Error("No saved analysis found for this case.");
-  }
+  const currentAnalysis = requireActiveReportGeneration(current.analysis, runId);
 
   const parsedReportDraft = reportDraftSchema.parse(reportDraft);
-  const mergedSections = current.analysis.reportDraft
-    ? mergeManualReportSections(
-        current.analysis.reportDraft.sections,
+  const mergedSections = currentAnalysis.reportDraft
+    ? mergeReportSections(
+        currentAnalysis.reportDraft.sections,
         parsedReportDraft.sections
       )
     : parsedReportDraft.sections;
@@ -43,7 +42,7 @@ export async function saveReportDraft(
   });
 
   const nextAnalysis = investigationAnalysisSchema.parse({
-    ...current.analysis,
+    ...currentAnalysis,
     reportDraft: nextReportDraft,
     reportGeneration: reportGenerationStateSchema.parse({
       status: "complete",
@@ -57,15 +56,19 @@ export async function saveReportDraft(
   });
 
   const supabase = getSupabaseAdmin();
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from("cases")
     .update({
       investigation_analysis: nextAnalysis,
       investigation_analysis_at: new Date().toISOString(),
     })
-    .eq("id", caseId);
+    .eq("id", caseId)
+    .eq("investigation_analysis->reportGeneration->>runId", runId)
+    .select("id")
+    .maybeSingle();
 
   if (error) throw new Error(error.message);
+  if (!data) throw new Error("Report generation was superseded.");
 
   return nextAnalysis;
 }
@@ -160,55 +163,74 @@ function resetReportSectionEdits(sections: ReportSection[]): ReportSection[] {
   });
 }
 
-function mergeManualReportSections(
+function mergeReportSections(
   currentSections: ReportSection[],
   generatedSections: ReportSection[]
 ): ReportSection[] {
-  return generatedSections.map((section) => {
-    if (section.type !== "manual") return section;
-
-    const currentSection = currentSections.find(
-      (candidate) => candidate.number === section.number
-    );
-
-    if (!currentSection) return section;
-
-    return {
-      ...section,
-      editedContent: currentSection.editedContent,
-      children: mergeManualSectionChildren(
-        currentSection.children ?? [],
-        section.children ?? []
-      ),
-    };
-  });
+  return mergeReportSectionChildren("", currentSections, generatedSections);
 }
 
-function mergeManualSectionChildren(
+function mergeReportSectionChildren(
+  parentNumber: string,
   currentChildren: ReportSection[],
   generatedChildren: ReportSection[]
 ): ReportSection[] {
   const mergedChildren = generatedChildren.map((child) => {
-    if (child.type !== "manual") return child;
-
     const currentChild = currentChildren.find(
-      (candidate) => candidate.number === child.number
+      (candidate) =>
+        candidate.type !== "custom" && candidate.number === child.number
     );
-
-    if (!currentChild) return child;
 
     return {
       ...child,
-      editedContent: currentChild.editedContent,
-      children: mergeManualSectionChildren(
-        currentChild.children ?? [],
+      editedContent:
+        child.type === "manual" ? currentChild?.editedContent : undefined,
+      children: mergeReportSectionChildren(
+        child.number,
+        currentChild?.children ?? [],
         child.children ?? []
       ),
     };
   });
   const customChildren = currentChildren.filter((child) => child.type === "custom");
+  const generatedNumbers = new Set(generatedChildren.map((child) => child.number));
+  const orphanedCustomChildren = currentChildren
+    .filter(
+      (child) => child.type !== "custom" && !generatedNumbers.has(child.number)
+    )
+    .flatMap((child) => collectCustomSections(child.children ?? []));
 
-  return [...mergedChildren, ...customChildren];
+  return renumberCustomSections(parentNumber, [
+    ...mergedChildren,
+    ...customChildren,
+    ...orphanedCustomChildren,
+  ]);
+}
+
+function collectCustomSections(sections: ReportSection[]): ReportSection[] {
+  return sections.flatMap((section) =>
+    section.type === "custom"
+      ? [section]
+      : collectCustomSections(section.children ?? [])
+  );
+}
+
+function renumberCustomSections(
+  parentNumber: string,
+  sections: ReportSection[]
+): ReportSection[] {
+  return sections.map((section, index) => {
+    const number =
+      section.type === "custom"
+        ? [parentNumber, index + 1].filter(Boolean).join(".")
+        : section.number;
+
+    return {
+      ...section,
+      number,
+      children: renumberCustomSections(number, section.children ?? []),
+    };
+  });
 }
 
 function hasReportSectionEdits(sections: ReportSection[]): boolean {
@@ -222,12 +244,16 @@ function hasReportSectionEdits(sections: ReportSection[]): boolean {
 
 export async function saveReportGenerationState(
   caseId: string,
-  state: ReportGenerationState
+  state: ReportGenerationState,
+  activeRunId?: string
 ): Promise<InvestigationAnalysis> {
   const current = await getCaseAnalysis(caseId);
 
   if (!current.analysis) {
     throw new Error("No saved analysis found for this case.");
+  }
+  if (activeRunId && current.analysis.reportGeneration.runId !== activeRunId) {
+    throw new Error("Report generation was superseded.");
   }
 
   const nextAnalysis = investigationAnalysisSchema.parse({
@@ -236,7 +262,7 @@ export async function saveReportGenerationState(
   });
 
   const supabase = getSupabaseAdmin();
-  const { error } = await supabase
+  let updateQuery = supabase
     .from("cases")
     .update({
       investigation_analysis: nextAnalysis,
@@ -244,7 +270,31 @@ export async function saveReportGenerationState(
     })
     .eq("id", caseId);
 
+  if (activeRunId) {
+    updateQuery = updateQuery.eq(
+      "investigation_analysis->reportGeneration->>runId",
+      activeRunId
+    );
+  }
+
+  const { data, error } = await updateQuery.select("id").maybeSingle();
+
   if (error) throw new Error(error.message);
+  if (!data) throw new Error("Report generation was superseded.");
 
   return nextAnalysis;
+}
+
+function requireActiveReportGeneration(
+  analysis: InvestigationAnalysis | null,
+  runId: string
+): InvestigationAnalysis {
+  if (!analysis) {
+    throw new Error("No saved analysis found for this case.");
+  }
+  if (analysis.reportGeneration.runId !== runId) {
+    throw new Error("Report generation was superseded.");
+  }
+
+  return analysis;
 }

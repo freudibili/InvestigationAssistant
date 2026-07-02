@@ -1,5 +1,10 @@
 import { NextResponse } from "next/server";
-import { createSignedUrl, getDocument } from "@/lib/db/documents";
+import {
+  createSignedUrl,
+  getDocument,
+  getDocumentSourceUrl,
+} from "@/lib/db/documents";
+import { CONTENT_VERSIONS, type ContentVersion } from "@/lib/types";
 
 /**
  * Stream the document's stored PDF bytes through our own origin. The PDF.js
@@ -8,21 +13,32 @@ import { createSignedUrl, getDocument } from "@/lib/db/documents";
  * still 302-redirects to the signed URL for "open in new tab".
  */
 export async function GET(
-  _request: Request,
-  { params }: { params: Promise<{ documentId: string }> }
+  request: Request,
+  { params }: { params: Promise<{ documentId: string }> },
 ) {
   try {
     const { documentId } = await params;
     const document = await getDocument(documentId);
     if (!document) {
-      return NextResponse.json({ error: "Document not found" }, { status: 404 });
+      return NextResponse.json(
+        { error: "Document not found" },
+        { status: 404 },
+      );
     }
 
-    const signedUrl = await createSignedUrl(document.fileUrl);
+    const requestedVersion = new URL(request.url).searchParams.get("version");
+    const version = CONTENT_VERSIONS.includes(
+      requestedVersion as ContentVersion,
+    )
+      ? (requestedVersion as ContentVersion)
+      : undefined;
+    const signedUrl = await createSignedUrl(
+      getDocumentSourceUrl(document, version),
+    );
     if (!signedUrl) {
       return NextResponse.json(
         { error: "Could not open source document" },
-        { status: 500 }
+        { status: 500 },
       );
     }
 
@@ -30,7 +46,7 @@ export async function GET(
     if (!upstream.ok || !upstream.body) {
       return NextResponse.json(
         { error: "Could not read source document" },
-        { status: 502 }
+        { status: 502 },
       );
     }
 

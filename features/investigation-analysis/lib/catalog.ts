@@ -1,6 +1,9 @@
 import { getExtension, getSupportedExtension } from "@/lib/documents";
 import type { CaseDocument, ExtractedData } from "@/lib/types";
-import type { QuoteRef, SourceRef } from "@/features/investigation-analysis/types";
+import type {
+  QuoteRef,
+  SourceRef,
+} from "@/features/investigation-analysis/types";
 
 type Quote = ExtractedData["notableQuotes"][number];
 type QuoteProvenance = NonNullable<Quote["provenance"]>;
@@ -19,7 +22,9 @@ export function sourceDocumentName(document: CaseDocument): string {
   const isPdf = getSupportedExtension(document.fileUrl) === ".pdf";
   const ext = getExtension(document.fileName);
   if (!isPdf || ext === ".pdf") return document.fileName;
-  const base = ext ? document.fileName.slice(0, -ext.length) : document.fileName;
+  const base = ext
+    ? document.fileName.slice(0, -ext.length)
+    : document.fileName;
   return `${base}.pdf`;
 }
 
@@ -38,7 +43,8 @@ export function parseFirstPage(sourcePages: string[] | undefined): {
     ) {
       continue;
     }
-    const match = normalized.match(/\bpages?\s+(\d+)/i) ?? normalized.match(/^(\d+)$/);
+    const match =
+      normalized.match(/\bpages?\s+(\d+)/i) ?? normalized.match(/^(\d+)$/);
     if (match) {
       const page = Number(match[1]);
       return { page, label: `Page ${page}` };
@@ -52,7 +58,7 @@ export function normalizeText(value: string): string {
 }
 
 function isClickableQuoteProvenance(
-  provenance: QuoteProvenance | undefined
+  provenance: QuoteProvenance | undefined,
 ): provenance is ClickableQuoteProvenance {
   return Boolean(
     provenance?.verified &&
@@ -60,14 +66,14 @@ function isClickableQuoteProvenance(
       provenance.charStart !== null &&
       provenance.charEnd !== null &&
       (provenance.sourceStatus === "verified" ||
-        provenance.sourceStatus === "fuzzy_verified")
+        provenance.sourceStatus === "fuzzy_verified"),
   );
 }
 
 /** Build a clickable page reference for a non-quote item (timeline event). */
 export function sourceRefFor(
   document: CaseDocument,
-  sourcePages: string[] | undefined
+  sourcePages: string[] | undefined,
 ): SourceRef | null {
   const { page, label } = parseFirstPage(sourcePages);
   if (page === null) return null;
@@ -88,7 +94,7 @@ export function sourceRefFor(
  */
 export function buildDocumentQuotes(
   document: CaseDocument,
-  docIndex: number
+  docIndex: number,
 ): QuoteRef[] {
   const data = document.extractedData;
   if (!data) return [];
@@ -99,10 +105,14 @@ export function buildDocumentQuotes(
     ...(data.factualStatements ?? []).flatMap((f) => f.supportingQuotes ?? []),
     ...(data.keyEvents ?? []).flatMap((e) => e.supportingQuotes ?? []),
     ...(data.potentialWitnesses ?? []).flatMap((w) => w.supportingQuotes ?? []),
-    ...(data.allegations ?? []).flatMap((a) => [
-      ...(a.relevantQuotes ?? []),
-      ...(a.witnesses ?? []).flatMap((w) => w.supportingQuotes ?? []),
-    ]),
+    ...(data.allegations ?? [])
+      .filter((allegation) => allegation.relevance !== "not_relevant")
+      .flatMap((allegation) => [
+        ...(allegation.relevantQuotes ?? []),
+        ...(allegation.witnesses ?? []).flatMap(
+          (witness) => witness.supportingQuotes ?? [],
+        ),
+      ]),
   ];
 
   const seen = new Map<string, QuoteRef>();
@@ -111,6 +121,7 @@ export function buildDocumentQuotes(
   for (const quote of collected) {
     const text = quote.text?.trim();
     if (!text || text.length < 8) continue;
+    if (quote.sourceReviewStatus !== "verified") continue;
     const key = normalizeText(text);
     if (seen.has(key)) continue;
 

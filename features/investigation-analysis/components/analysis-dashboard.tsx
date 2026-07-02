@@ -70,15 +70,10 @@ const CONDUCT_CATEGORY_LABELS = [
 ];
 
 type GlobalCalculationPhase =
-  | "idle"
-  | "conduct"
-  | "overall"
-  | "updating"
-  | "complete"
-  | "error";
+  "idle" | "conduct" | "overall" | "updating" | "complete" | "error";
 
 function verdictVariant(
-  verdict: string
+  verdict: string,
 ): "default" | "secondary" | "outline" | "destructive" {
   switch (verdict) {
     case "Supported":
@@ -115,10 +110,12 @@ function DashboardBody({
 }) {
   const lookups = useMemo<Lookups>(
     () => ({
-      interviewNameById: new Map(analysis.interviews.map((i) => [i.id, i.name])),
+      interviewNameById: new Map(
+        analysis.interviews.map((i) => [i.id, i.name]),
+      ),
       quoteById: new Map(analysis.quotes.map((quote) => [quote.id, quote])),
     }),
-    [analysis]
+    [analysis],
   );
 
   return (
@@ -146,10 +143,7 @@ function DashboardBody({
         )}
       </Section>
 
-      <Section
-        icon={Gavel}
-        title={`Grievances (${analysis.reproches.length})`}
-      >
+      <Section icon={Gavel} title={`Grievances (${analysis.reproches.length})`}>
         {analysis.reproches.length === 0 ? (
           <Empty>No grievances triangulated.</Empty>
         ) : (
@@ -227,10 +221,10 @@ function OverallAssessmentCard({
   const [isPending, startTransition] = useTransition();
   const queryClient = useQueryClient();
   const assessedCount = analysis.reproches.filter(
-    (reproche) => reproche.conductAssessment
+    (reproche) => reproche.conductAssessment,
   ).length;
   const missingAssessmentReproches = analysis.reproches.filter(
-    (reproche) => !reproche.conductAssessment
+    (reproche) => !reproche.conductAssessment,
   );
   const missingAssessmentCount = analysis.reproches.length - assessedCount;
   const canCalculate = analysis.reproches.length > 0;
@@ -290,7 +284,7 @@ function OverallAssessmentCard({
           status: current?.status ?? "ready",
           generatedAt: current?.generatedAt ?? latestAnalysis.generatedAt,
           analysis: latestAnalysis,
-        })
+        }),
       );
       setCalculationPhase("complete");
     });
@@ -332,7 +326,8 @@ function OverallAssessmentCard({
           {missingAssessmentCount > 0 ? (
             <p className="text-muted-foreground text-xs">
               This will automatically calculate {missingAssessmentCount} missing
-              grievance assessment{missingAssessmentCount === 1 ? "" : "s"} first.
+              grievance assessment{missingAssessmentCount === 1 ? "" : "s"}{" "}
+              first.
             </p>
           ) : null}
         </div>
@@ -411,7 +406,7 @@ function GlobalCalculationSteps({
       status: conductStepStatus(
         phase,
         missingAssessmentCount,
-        completedAssessmentCount
+        completedAssessmentCount,
       ),
     },
     {
@@ -421,7 +416,7 @@ function GlobalCalculationSteps({
       status: overallStepStatus(
         phase,
         missingAssessmentCount,
-        completedAssessmentCount
+        completedAssessmentCount,
       ),
     },
     {
@@ -461,7 +456,9 @@ function StepIcon({
     return <CheckCircle2 className="mt-0.5 size-4 text-emerald-600" />;
   }
   if (status === "running") {
-    return <Loader2 className="text-muted-foreground mt-0.5 size-4 animate-spin" />;
+    return (
+      <Loader2 className="text-muted-foreground mt-0.5 size-4 animate-spin" />
+    );
   }
   if (status === "error") {
     return <Circle className="text-destructive mt-0.5 size-4 fill-current" />;
@@ -472,7 +469,7 @@ function StepIcon({
 function conductStepStatus(
   phase: GlobalCalculationPhase,
   missingAssessmentCount: number,
-  completedAssessmentCount: number
+  completedAssessmentCount: number,
 ): "pending" | "running" | "complete" | "error" {
   if (phase === "error") {
     return completedAssessmentCount === missingAssessmentCount
@@ -495,7 +492,7 @@ function conductStepStatus(
 function overallStepStatus(
   phase: GlobalCalculationPhase,
   missingAssessmentCount: number,
-  completedAssessmentCount: number
+  completedAssessmentCount: number,
 ): "pending" | "running" | "complete" | "error" {
   if (phase === "error") {
     return completedAssessmentCount === missingAssessmentCount
@@ -508,7 +505,7 @@ function overallStepStatus(
 }
 
 function updateStepStatus(
-  phase: GlobalCalculationPhase
+  phase: GlobalCalculationPhase,
 ): "pending" | "running" | "complete" | "error" {
   if (phase === "updating") return "running";
   if (phase === "complete") return "complete";
@@ -525,7 +522,7 @@ function ReprocheCard({
   lookups: Lookups;
 }) {
   const [assessment, setAssessment] = useState<ConductAssessment | null>(
-    reproche.conductAssessment
+    reproche.conductAssessment,
   );
   const [isPending, startTransition] = useTransition();
   const queryClient = useQueryClient();
@@ -546,7 +543,7 @@ function ReprocheCard({
           status: current?.status ?? "ready",
           generatedAt: current?.generatedAt ?? result.analysis.generatedAt,
           analysis: result.analysis,
-        })
+        }),
       );
     });
   }
@@ -564,7 +561,9 @@ function ReprocheCard({
           </div>
         </div>
         {reproche.description ? (
-          <p className="text-muted-foreground text-sm">{reproche.description}</p>
+          <p className="text-muted-foreground text-sm">
+            {reproche.description}
+          </p>
         ) : null}
       </CardHeader>
       {shouldRenderContent ? (
@@ -663,7 +662,9 @@ function DeferredCardContentPlaceholder() {
   );
 }
 
-function useRenderWhenNearViewport(ref: React.RefObject<Element | null>): boolean {
+function useRenderWhenNearViewport(
+  ref: React.RefObject<Element | null>,
+): boolean {
   const [shouldRender, setShouldRender] = useState(false);
 
   useEffect(() => {
@@ -683,7 +684,7 @@ function useRenderWhenNearViewport(ref: React.RefObject<Element | null>): boolea
         setShouldRender(true);
         observer.disconnect();
       },
-      { rootMargin: "900px 0px" }
+      { rootMargin: "900px 0px" },
     );
 
     observer.observe(node);
@@ -703,9 +704,9 @@ function ConductAssessmentPanel({
   onReassess: () => void;
 }) {
   const categories = CONDUCT_CATEGORY_LABELS.map((label) =>
-    assessment.categories.find((item) => item.category === label)
+    assessment.categories.find((item) => item.category === label),
   ).filter((item): item is ConductAssessment["categories"][number] =>
-    Boolean(item && item.confidence > 0)
+    Boolean(item && item.confidence > 0),
   );
   const missingInformation = uniqueStrings([
     ...assessment.missingInformation,
@@ -725,15 +726,14 @@ function ConductAssessmentPanel({
           onClick={onReassess}
           disabled={isPending}
         >
-          {isPending ? (
-            <Loader2 className="animate-spin" />
-          ) : (
-            <RotateCcw />
-          )}
-          {isPending ? "Re-analysing..." : "Re-analyse"}
+          {isPending ? <Loader2 className="animate-spin" /> : <RotateCcw />}
+          {isPending ? "Recalculating..." : "Recalculate conduct assessment"}
         </Button>
         {categories.map((item) => (
-          <Badge key={item.category} variant={conductStatusVariant(item.status)}>
+          <Badge
+            key={item.category}
+            variant={conductStatusVariant(item.status)}
+          >
             {item.category}: {item.status} ({item.confidence}%)
           </Badge>
         ))}
@@ -769,7 +769,7 @@ function MobbingFactorAssessment({
   assessment: ConductAssessment;
 }) {
   const factors = assessment.mobbingFactorAssessments.filter(
-    (item) => item.confidence > 0
+    (item) => item.confidence > 0,
   );
 
   if (factors.length === 0) {
@@ -805,7 +805,7 @@ function uniqueStrings(items: string[]): string[] {
 }
 
 function conductStatusVariant(
-  status: string
+  status: string,
 ): "default" | "secondary" | "outline" | "destructive" | "success" | "warning" {
   switch (status) {
     case "Likely indicated":
@@ -840,12 +840,12 @@ function StatementBlock({
         .filter((quote): quote is QuoteRef =>
           Boolean(
             quote &&
-              quote.documentId === statement.interviewId &&
-              quote.provenanceId &&
-              quote.page
-          )
+            quote.documentId === statement.interviewId &&
+            quote.provenanceId &&
+            quote.page,
+          ),
         ),
-    [lookups, statement.interviewId, statement.quoteIds]
+    [lookups, statement.interviewId, statement.quoteIds],
   );
 
   return (
@@ -883,7 +883,7 @@ function InlineEvidenceText({
   const openViewer = useSourceViewer();
   const segments = useMemo(
     () => buildInlineEvidenceSegments(text, quotes),
-    [text, quotes]
+    [text, quotes],
   );
 
   function openQuote(quote: QuoteRef) {
@@ -918,7 +918,7 @@ function InlineEvidenceText({
           >
             {segment.fragment}
           </button>
-        )
+        ),
       )}
     </>
   );
@@ -933,7 +933,7 @@ type InlineEvidenceSegment =
 
 function buildInlineEvidenceSegments(
   text: string,
-  quotes: QuoteRef[]
+  quotes: QuoteRef[],
 ): InlineEvidenceSegment[] {
   const matches = buildQuoteTextMatches(text, quotes);
   if (matches.length === 0) return [text];

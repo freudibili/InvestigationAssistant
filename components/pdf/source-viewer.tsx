@@ -6,12 +6,13 @@ import { Loader2 } from "lucide-react";
 
 import "react-pdf/dist/Page/TextLayer.css";
 import "react-pdf/dist/Page/AnnotationLayer.css";
+import type { ContentVersion } from "@/lib/types";
 
 // pdf.js needs a worker; load the matching one bundled with pdfjs-dist. The
 // `new URL(..., import.meta.url)` form lets the bundler fingerprint and serve it.
 pdfjs.GlobalWorkerOptions.workerSrc = new URL(
   "pdfjs-dist/build/pdf.worker.min.mjs",
-  import.meta.url
+  import.meta.url,
 ).toString();
 
 function normalize(value: string): string {
@@ -71,6 +72,8 @@ export type SourcePdfViewerProps = {
   normalizedPageCharStart?: number | null;
   normalizedPageCharEnd?: number | null;
   quote?: string | null;
+  version?: ContentVersion;
+  onTextSelection?: (text: string) => void;
 };
 
 export function SourcePdfViewer({
@@ -84,6 +87,8 @@ export function SourcePdfViewer({
   normalizedPageCharStart,
   normalizedPageCharEnd,
   quote,
+  version,
+  onTextSelection,
 }: SourcePdfViewerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState<number>(0);
@@ -93,11 +98,16 @@ export function SourcePdfViewer({
   // A stable `file` reference avoids react-pdf reloading the document on every
   // render. Memoize on the route so it only changes when the document changes.
   const file = useMemo(
-    () => ({ url: `/api/documents/${documentId}/file` }),
-    [documentId]
+    () => ({
+      url: `/api/documents/${documentId}/file${version ? `?version=${version}` : ""}`,
+    }),
+    [documentId, version],
   );
 
-  const normalizedQuote = useMemo(() => (quote ? normalize(quote) : null), [quote]);
+  const normalizedQuote = useMemo(
+    () => (quote ? normalize(quote) : null),
+    [quote],
+  );
 
   useEffect(() => {
     const element = containerRef.current;
@@ -152,14 +162,25 @@ export function SourcePdfViewer({
   function handleTextLayerRendered() {
     // Scroll the first highlighted span into view once the text layer exists.
     const mark = containerRef.current?.querySelector(
-      "mark.source-quote-highlight"
+      "mark.source-quote-highlight",
     );
     mark?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }
+
+  function handleTextSelection() {
+    if (!onTextSelection) return;
+    const selection = window.getSelection();
+    const selectedText = selection?.toString().replace(/\s+/g, " ").trim();
+    if (!selection || !selectedText || selection.rangeCount === 0) return;
+    const range = selection.getRangeAt(0);
+    if (!containerRef.current?.contains(range.commonAncestorContainer)) return;
+    onTextSelection(selectedText);
   }
 
   return (
     <div
       ref={containerRef}
+      onMouseUp={handleTextSelection}
       className="bg-muted/30 min-h-0 w-full flex-1 overflow-auto rounded-md border"
     >
       {/* highlight styling injected globally so it applies to text-layer HTML */}
@@ -175,9 +196,7 @@ export function SourcePdfViewer({
             setNumPages(n);
             setError(null);
           }}
-          onLoadError={() =>
-            setError("Could not load the source document.")
-          }
+          onLoadError={() => setError("Could not load the source document.")}
           loading={
             <div className="text-muted-foreground flex h-full items-center justify-center gap-2 p-8 text-sm">
               <Loader2 className="size-4 animate-spin" />

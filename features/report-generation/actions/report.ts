@@ -59,7 +59,20 @@ export async function generateReportDraftAction(
     if (!analysis) {
       return {
         ok: false,
-        message: "No approved analysis found for this case.",
+        message: "No analysis found for this case.",
+        issues: [],
+      };
+    }
+    if (
+      documents.some(
+        (document) =>
+          document.status === "extracted" &&
+          !["approved", "excluded"].includes(document.extractionReviewStatus),
+      )
+    ) {
+      return {
+        ok: false,
+        message: "Approve every extracted document before generating a report.",
         issues: [],
       };
     }
@@ -79,31 +92,39 @@ export async function generateReportDraftAction(
       {
         language,
         onStep: async (step) => {
-          await saveReportGenerationState(caseId, {
-            status: "generating",
-            runId,
-            currentStep: step.label,
-            currentStepIndex: step.index,
-            totalSteps: REPORT_GENERATION_STEPS.length,
-            errorMessage: null,
-            updatedAt: new Date().toISOString(),
-          });
+          await saveReportGenerationState(
+            caseId,
+            {
+              status: "generating",
+              runId,
+              currentStep: step.label,
+              currentStepIndex: step.index,
+              totalSteps: REPORT_GENERATION_STEPS.length,
+              errorMessage: null,
+              updatedAt: new Date().toISOString(),
+            },
+            runId
+          );
         },
       }
     );
 
     const saveStep = REPORT_GENERATION_STEPS[REPORT_GENERATION_STEPS.length - 1];
-    await saveReportGenerationState(caseId, {
-      status: "generating",
-      runId,
-      currentStep: saveStep?.label ?? "Save draft",
-      currentStepIndex: saveStep?.index ?? REPORT_GENERATION_STEPS.length - 1,
-      totalSteps: REPORT_GENERATION_STEPS.length,
-      errorMessage: null,
-      updatedAt: new Date().toISOString(),
-    });
+    await saveReportGenerationState(
+      caseId,
+      {
+        status: "generating",
+        runId,
+        currentStep: saveStep?.label ?? "Save draft",
+        currentStepIndex: saveStep?.index ?? REPORT_GENERATION_STEPS.length - 1,
+        totalSteps: REPORT_GENERATION_STEPS.length,
+        errorMessage: null,
+        updatedAt: new Date().toISOString(),
+      },
+      runId
+    );
 
-    const savedAnalysis = await saveReportDraft(caseId, reportDraft);
+    const savedAnalysis = await saveReportDraft(caseId, runId, reportDraft);
     revalidatePath(`/cases/${caseId}/report`);
     return { ok: true, reportDraft, analysis: savedAnalysis };
   } catch (error) {
@@ -160,15 +181,19 @@ async function saveFailedReportGenerationState(
   error: unknown
 ): Promise<void> {
   try {
-    await saveReportGenerationState(caseId, {
-      status: "failed",
-      runId,
-      currentStep: "Report generation failed",
-      currentStepIndex: 0,
-      totalSteps: REPORT_GENERATION_STEPS.length,
-      errorMessage: toReportGenerationUserMessage(error),
-      updatedAt: new Date().toISOString(),
-    });
+    await saveReportGenerationState(
+      caseId,
+      {
+        status: "failed",
+        runId,
+        currentStep: "Report generation failed",
+        currentStepIndex: 0,
+        totalSteps: REPORT_GENERATION_STEPS.length,
+        errorMessage: toReportGenerationUserMessage(error),
+        updatedAt: new Date().toISOString(),
+      },
+      runId
+    );
   } catch (saveError) {
     console.error("[report-generation] failed to save failure state:", saveError);
   }

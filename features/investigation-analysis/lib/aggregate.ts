@@ -92,7 +92,8 @@ export function buildAggregate(documents: CaseDocument[]): AggregateResult {
   const interviews: InterviewRef[] = [];
   const quotes: QuoteRef[] = [];
   const aiInterviews: AiInterview[] = [];
-  const aiEvents: { id: string; date: string | null; description: string }[] = [];
+  const aiEvents: { id: string; date: string | null; description: string }[] =
+    [];
   const eventEntries: EventEntry[] = [];
 
   const people = new Map<
@@ -154,7 +155,10 @@ export function buildAggregate(documents: CaseDocument[]): AggregateResult {
     }
 
     // Allegations (raw count for the summary).
-    allegationCount += (data.allegations ?? []).length;
+    const relevantAllegations = (data.allegations ?? []).filter(
+      (allegation) => allegation.relevance !== "not_relevant",
+    );
+    allegationCount += relevantAllegations.length;
 
     // Events → case-level entries with ids.
     (data.keyEvents ?? []).forEach((event, eventIndex) => {
@@ -168,24 +172,19 @@ export function buildAggregate(documents: CaseDocument[]): AggregateResult {
         sourcePages: event.sourcePages ?? [],
       };
       eventEntries.push(entry);
-      aiEvents.push({ id: eventId, date: entry.date, description: entry.description });
+      aiEvents.push({
+        id: eventId,
+        date: entry.date,
+        description: entry.description,
+      });
     });
 
-    // Witnesses (prefer the consolidated form; fall back to potential).
-    const docWitnesses =
-      (data.consolidatedWitnesses ?? []).length > 0
-        ? (data.consolidatedWitnesses ?? []).map((w) => ({
-            name: w.name,
-            why: w.whyTheyMatter,
-            related: w.relatedAllegations ?? [],
-            priority: w.priorityScore ?? 50,
-          }))
-        : (data.potentialWitnesses ?? []).map((w) => ({
-            name: w.name,
-            why: w.relevance,
-            related: [] as string[],
-            priority: 50,
-          }));
+    const docWitnesses = (data.potentialWitnesses ?? []).map((w) => ({
+      name: w.name,
+      why: w.relevance,
+      related: w.relatedAllegations,
+      priority: 50,
+    }));
     for (const w of docWitnesses) {
       const key = normalizeText(w.name);
       if (!key) continue;
@@ -197,8 +196,10 @@ export function buildAggregate(documents: CaseDocument[]): AggregateResult {
         priority: 0,
       };
       entry.interviewIds.add(id);
-      for (const rel of w.related) if (rel.trim()) entry.relatedAllegations.add(rel.trim());
-      if (!entry.whyTheyMatter && w.why?.trim()) entry.whyTheyMatter = w.why.trim();
+      for (const rel of w.related)
+        if (rel.trim()) entry.relatedAllegations.add(rel.trim());
+      if (!entry.whyTheyMatter && w.why?.trim())
+        entry.whyTheyMatter = w.why.trim();
       entry.priority = Math.max(entry.priority, w.priority);
       witnesses.set(key, entry);
     }
@@ -213,17 +214,17 @@ export function buildAggregate(documents: CaseDocument[]): AggregateResult {
       issue: data.investigationScope?.scopeSummary ?? data.summary ?? "",
       primaryClaimants: data.investigationScope?.primaryClaimants ?? [],
       primaryAccused: data.investigationScope?.primaryAccused ?? [],
-      allegations: (data.allegations ?? []).map((a) => ({
+      allegations: relevantAllegations.map((a) => ({
         title: a.allegation || a.description,
         description: a.description,
         claimant: a.claimant ?? null,
         subject: a.subject ?? null,
         classification: a.classification,
         supportingEvidence: a.supportingEvidence.map(
-          (item) => item.description
+          (item) => item.description,
         ),
         contradictoryEvidence: a.contradictoryEvidence.map(
-          (item) => item.description
+          (item) => item.description,
         ),
         missingEvidence: a.missingEvidence,
         followUpQuestions: a.followUpQuestions,
@@ -301,7 +302,7 @@ export function buildAggregate(documents: CaseDocument[]): AggregateResult {
 }
 
 function roleHintForIntervieweeRole(
-  role: IntervieweeRole | null
+  role: IntervieweeRole | null,
 ): AiInterview["roleHint"] {
   if (role === "claimant" || role === "accused") return role;
   return "reference";
@@ -310,7 +311,7 @@ function roleHintForIntervieweeRole(
 /** Merge duplicate events across interviews and sort chronologically. */
 function buildTimeline(
   events: EventEntry[],
-  documents: CaseDocument[]
+  documents: CaseDocument[],
 ): TimelineEvent[] {
   const docById = new Map(documents.map((d) => [d.id, d]));
   const merged = new Map<string, TimelineEvent>();
@@ -331,7 +332,10 @@ function buildTimeline(
           existing.participants.push(p);
         }
       }
-      if (ref && !existing.sources.some((s) => s.documentId === ref.documentId)) {
+      if (
+        ref &&
+        !existing.sources.some((s) => s.documentId === ref.documentId)
+      ) {
         existing.sources.push(ref);
       }
       continue;
@@ -386,7 +390,7 @@ function buildMainParties(documents: CaseDocument[]): Party[] {
 
     const identity = findIdentityForName(
       document.extractedData.canonicalIdentities,
-      rawIntervieweeName
+      rawIntervieweeName,
     );
     const canonicalName = identity?.canonicalName.trim() || rawIntervieweeName;
     const key = normalizeText(canonicalName);
@@ -395,7 +399,7 @@ function buildMainParties(documents: CaseDocument[]): Party[] {
     const aliases = aliasesForParty(
       canonicalName,
       rawIntervieweeName,
-      document.extractedData.canonicalIdentities
+      document.extractedData.canonicalIdentities,
     );
     const roleRank = mainPartyRoleRank(caseRole);
     const existing = parties.get(key);
@@ -432,9 +436,7 @@ function buildMainParties(documents: CaseDocument[]): Party[] {
     }));
 }
 
-function caseRoleForIntervieweeRole(
-  role: IntervieweeRole
-): MainPartyCaseRole {
+function caseRoleForIntervieweeRole(role: IntervieweeRole): MainPartyCaseRole {
   if (role === "witness") return "reference_person";
   return role;
 }
@@ -456,7 +458,7 @@ function mainPartyRoleRank(role: MainPartyCaseRole): number {
 
 function findIdentityForName(
   identities: ExtractedData["canonicalIdentities"],
-  name: string
+  name: string,
 ) {
   const key = normalizeText(name);
 
@@ -469,7 +471,7 @@ function findIdentityForName(
 function aliasesForParty(
   canonicalName: string,
   intervieweeName: string,
-  identities: ExtractedData["canonicalIdentities"]
+  identities: ExtractedData["canonicalIdentities"],
 ): string[] {
   const canonicalKey = normalizeText(canonicalName);
   const aliases = new Set<string>();
@@ -488,7 +490,7 @@ function aliasesForParty(
 function addAlias(
   name: string,
   canonicalKey: string,
-  aliases: Set<string>
+  aliases: Set<string>,
 ): void {
   const trimmed = name.trim();
   if (!trimmed || normalizeText(trimmed) === canonicalKey) return;

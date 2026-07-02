@@ -1,6 +1,9 @@
 import "server-only";
 
-import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
+import fontkit from "@pdf-lib/fontkit";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+import { PDFDocument, rgb, type PDFFont } from "pdf-lib";
 
 /**
  * A4 page geometry and text layout used when rendering extracted plain text
@@ -16,6 +19,16 @@ const MAX_TEXT_WIDTH = PAGE_WIDTH - MARGIN * 2;
 const MAX_LINES_PER_PAGE = Math.floor((PAGE_HEIGHT - MARGIN * 2) / LINE_HEIGHT);
 
 const PAGE_BREAK = "\n\n--- Page {{PAGE_NUMBER}} ---\n\n";
+const UNICODE_FONT_PATH = join(
+  process.cwd(),
+  "node_modules",
+  "next",
+  "dist",
+  "compiled",
+  "@vercel",
+  "og",
+  "Geist-Regular.ttf",
+);
 
 /**
  * Render already-extracted plain text into a real, paginated PDF. Returns both
@@ -23,23 +36,17 @@ const PAGE_BREAK = "\n\n--- Page {{PAGE_NUMBER}} ---\n\n";
  * and `markedText`, which carries the exact `--- Page N ---` markers the rest of
  * the pipeline expects from a native PDF.
  *
- * `markedText` preserves the document's ORIGINAL characters (it is what the AI
- * extracts from), while only the bytes drawn into the PDF are downgraded to the
- * font's encoding. Both are built from the same line/page layout, so a citation
- * of "Page N" still lines up with page N of the viewer — but a non-Latin name
- * survives in the extraction even if the standard font can't render its glyphs.
+ * `markedText` and the searchable PDF use the same characters and page layout,
+ * so a citation of "Page N" lines up with page N of the viewer.
  */
 export async function convertTextToPaginatedPdf(
-  rawText: string
+  rawText: string,
 ): Promise<{ pdfBytes: Uint8Array; markedText: string }> {
   const pdf = await PDFDocument.create();
-  const font = await pdf.embedFont(StandardFonts.Helvetica);
+  const font = await embedDocumentFont(pdf, rawText);
 
-  // Wrap on the original text, measuring widths against the renderable
-  // (font-encodable) form so `widthOfTextAtSize` can never throw on an
-  // unencodable glyph.
   const wrappedLines = wrapText(rawText, (text) =>
-    font.widthOfTextAtSize(toRenderable(text), FONT_SIZE)
+    font.widthOfTextAtSize(text, FONT_SIZE),
   );
   const pages = paginate(wrappedLines);
 
@@ -52,9 +59,8 @@ export async function convertTextToPaginatedPdf(
     let y = PAGE_HEIGHT - MARGIN;
 
     for (const line of lines) {
-      const rendered = toRenderable(line);
-      if (rendered.length > 0) {
-        page.drawText(rendered, {
+      if (line.length > 0) {
+        page.drawText(line, {
           x: MARGIN,
           y,
           size: FONT_SIZE,
@@ -71,12 +77,107 @@ export async function convertTextToPaginatedPdf(
     .map(
       (lines, index) =>
         PAGE_BREAK.replace("{{PAGE_NUMBER}}", String(index + 1)) +
-        lines.join("\n").trim()
+        lines.join("\n").trim(),
     )
     .join("")
     .trim();
 
   return { pdfBytes, markedText };
+}
+
+export async function convertMarkedTextToPdf(
+  markedText: string,
+): Promise<Uint8Array> {
+  const pdf = await PDFDocument.create();
+  const font = await embedDocumentFont(pdf, markedText);
+  const sourcePages = splitMarkedPages(markedText);
+
+  for (const sourcePage of sourcePages) {
+    const page = pdf.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
+    const layout = fitSourcePage(sourcePage, (text, size) =>
+      font.widthOfTextAtSize(text, size),
+    );
+    let y = PAGE_HEIGHT - layout.margin;
+
+    for (const line of layout.lines) {
+      if (line) {
+        page.drawText(line, {
+          x: layout.margin,
+          y,
+          size: layout.fontSize,
+          font,
+          color: rgb(0, 0, 0),
+        });
+      }
+      y -= layout.lineHeight;
+    }
+  }
+
+  if (sourcePages.length === 0) pdf.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
+  return pdf.save();
+}
+
+async function embedDocumentFont(
+  pdf: PDFDocument,
+  text: string,
+): Promise<PDFFont> {
+  pdf.registerFontkit(fontkit);
+  const font = await pdf.embedFont(await readFile(UNICODE_FONT_PATH), {
+    subset: true,
+  });
+  assertFontSupportsText(font, text);
+  return font;
+}
+
+function assertFontSupportsText(font: PDFFont, text: string): void {
+  const supportedCharacters = new Set(font.getCharacterSet());
+  const unsupportedCharacter = Array.from(normalizeWhitespace(text)).find(
+    (character) =>
+      character !== "\n" &&
+      !supportedCharacters.has(character.codePointAt(0) ?? -1),
+  );
+  if (unsupportedCharacter) {
+    const codePoint = unsupportedCharacter.codePointAt(0)?.toString(16);
+    throw new Error(
+      `The corrected PDF font cannot represent “${unsupportedCharacter}” (U+${codePoint?.toUpperCase()}).`,
+    );
+  }
+}
+
+function splitMarkedPages(markedText: string): string[] {
+  const marker = /(?:^|\n)\s*--- Page \d+ ---\s*(?:\n|$)/g;
+  const matches = Array.from(markedText.matchAll(marker));
+  if (matches.length === 0) return [markedText.trim()];
+  return matches.map((match, index) => {
+    const start = (match.index ?? 0) + match[0].length;
+    const end = matches[index + 1]?.index ?? markedText.length;
+    return markedText.slice(start, end).trim();
+  });
+}
+
+function fitSourcePage(
+  text: string,
+  measure: (text: string, size: number) => number,
+) {
+  const margin = 30;
+
+  for (let fontSize = 9; fontSize >= 4; fontSize -= 0.5) {
+    const lineHeight = fontSize * 1.25;
+    const lines = wrapText(text, (line) => measure(line, fontSize));
+    if (lines.length <= Math.floor((PAGE_HEIGHT - margin * 2) / lineHeight)) {
+      return { lines, fontSize, lineHeight, margin };
+    }
+  }
+
+  const lines = wrapText(text, (line) => measure(line, 4));
+  const lineHeight = (PAGE_HEIGHT - margin * 2) / Math.max(lines.length, 1);
+  const fontSize = Math.min(4, lineHeight * 0.8);
+  return {
+    lines,
+    fontSize,
+    lineHeight,
+    margin,
+  };
 }
 
 /**
@@ -88,7 +189,7 @@ export async function convertTextToPaginatedPdf(
  */
 function wrapText(
   rawText: string,
-  measure: (text: string) => number
+  measure: (text: string) => number,
 ): string[] {
   const lines: string[] = [];
 
@@ -130,7 +231,7 @@ function wrapText(
 
 function breakLongWord(
   word: string,
-  measure: (text: string) => number
+  measure: (text: string) => number,
 ): string[] {
   const pieces: string[] = [];
   let current = "";
@@ -159,8 +260,6 @@ function paginate(lines: string[]): string[][] {
   return pages;
 }
 
-const UNDEFINED_WIN_ANSI = new Set([0x81, 0x8d, 0x8f, 0x90, 0x9d]);
-
 /**
  * Normalise line endings and tabs without dropping any characters. This is the
  * text the layout (and therefore the AI's `markedText`) is built from, so it
@@ -168,35 +267,4 @@ const UNDEFINED_WIN_ANSI = new Set([0x81, 0x8d, 0x8f, 0x90, 0x9d]);
  */
 function normalizeWhitespace(text: string): string {
   return text.replace(/\r\n?/g, "\n").replace(/\t/g, "    ");
-}
-
-/**
- * Downgrade a line to what the Helvetica standard font can draw: it encodes
- * WinAnsi (cp1252) only. Common Unicode punctuation is folded to ASCII, then
- * anything still outside the range is dropped so `drawText` can never throw on
- * an unencodable glyph. Used ONLY for rendering — never for the AI input.
- */
-function toRenderable(text: string): string {
-  const normalized = text
-    .replace(/\r\n?/g, "\n")
-    .replace(/[‘’‚‛]/g, "'")
-    .replace(/[“”„‟]/g, '"')
-    .replace(/[–—]/g, "-")
-    .replace(/…/g, "...")
-    .replace(/ /g, " ")
-    .replace(/\t/g, "    ");
-
-  let result = "";
-  for (const char of normalized) {
-    if (char === "\n") {
-      result += char;
-      continue;
-    }
-    const code = char.codePointAt(0) ?? 0;
-    if (code <= 0xff && !UNDEFINED_WIN_ANSI.has(code)) {
-      result += char;
-    }
-  }
-
-  return result;
 }

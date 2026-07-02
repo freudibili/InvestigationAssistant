@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useMemo, useState } from "react";
 import { ArrowLeft } from "lucide-react";
 
 import { CaseTypeControl } from "@/components/cases/case-type-control";
@@ -15,17 +14,6 @@ type CaseTab = {
   href: string;
   label: string;
   exact?: boolean;
-};
-
-type CachedCasePanel = {
-  pathname: string;
-  children: React.ReactNode;
-};
-
-type CasePanelState = {
-  caseId: string;
-  panels: Record<string, CachedCasePanel>;
-  previousActiveTabHref: string | null;
 };
 
 /**
@@ -50,64 +38,11 @@ export function CaseChrome({
   });
   const investigationCase = data?.case ?? initialCase;
   const pathname = usePathname();
-  const [panelState, setPanelState] = useState<CasePanelState>({
-    caseId,
-    panels: {},
-    previousActiveTabHref: null,
-  });
-
-  const tabs = useMemo<CaseTab[]>(
-    () => [
-      { href: `/cases/${caseId}/extraction`, label: "Extraction" },
-      { href: `/cases/${caseId}/analysis`, label: "Investigation Analysis" },
-      { href: `/cases/${caseId}/report`, label: "Report Draft" },
-    ],
-    [caseId]
-  );
-
-  const activeTab = tabs.find(isActive) ?? null;
-  const activeTabHref = activeTab?.href ?? null;
-  const currentPanelState =
-    panelState.caseId === caseId
-      ? panelState
-      : { caseId, panels: {}, previousActiveTabHref: null };
-  const cachedPanel = activeTab
-    ? currentPanelState.panels[activeTab.href]
-    : null;
-  const shouldCachePanel =
-    activeTab &&
-    (!cachedPanel ||
-      (currentPanelState.previousActiveTabHref === activeTab.href &&
-        cachedPanel.pathname !== pathname));
-
-  if (
-    panelState.caseId !== caseId ||
-    shouldCachePanel ||
-    currentPanelState.previousActiveTabHref !== activeTabHref
-  ) {
-    setPanelState({
-      caseId,
-      panels:
-        activeTab && shouldCachePanel
-          ? {
-              ...currentPanelState.panels,
-              [activeTab.href]: { pathname, children },
-            }
-          : currentPanelState.panels,
-      previousActiveTabHref: activeTabHref,
-    });
-  }
-
-  const cachedPanels =
-    activeTab && shouldCachePanel
-      ? {
-          ...currentPanelState.panels,
-          [activeTab.href]: { pathname, children },
-        }
-      : currentPanelState.panels;
-  const activePanel = activeTab
-    ? (cachedPanels[activeTab.href]?.children ?? children)
-    : children;
+  const tabs: CaseTab[] = [
+    { href: `/cases/${caseId}/extraction`, label: "Extraction" },
+    { href: `/cases/${caseId}/analysis`, label: "Investigation Analysis" },
+    { href: `/cases/${caseId}/report`, label: "Report Draft" },
+  ];
 
   function isActive(tab: CaseTab) {
     if (tab.exact) return pathname === tab.href;
@@ -157,22 +92,7 @@ export function CaseChrome({
         </ul>
       </nav>
 
-      {activeTab ? (
-        <div>
-          {Object.entries(cachedPanels).map(([href, panel]) => {
-            if (href === activeTab.href) return null;
-
-            return (
-              <div key={href} hidden aria-hidden>
-                {panel.children}
-              </div>
-            );
-          })}
-          <div key={activeTab.href}>{activePanel}</div>
-        </div>
-      ) : (
-        <div>{children}</div>
-      )}
+      <div>{children}</div>
     </div>
   );
 }

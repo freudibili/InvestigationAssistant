@@ -25,7 +25,7 @@ export class ExtractionError extends Error {
 
   constructor(
     userMessage: string,
-    options: { recoverable?: boolean; detail?: string; cause?: unknown } = {}
+    options: { recoverable?: boolean; detail?: string; cause?: unknown } = {},
   ) {
     super(userMessage, options.cause ? { cause: options.cause } : undefined);
     this.name = "ExtractionError";
@@ -533,11 +533,11 @@ Page drafts:
 export async function extractInterviewData(
   transcript: string,
   mode: ExtractionMode = DEFAULT_EXTRACTION_MODE,
-  intervieweeRole: IntervieweeRole | null = null
+  intervieweeRole: IntervieweeRole | null = null,
 ): Promise<ExtractionResponse> {
   return requestExtraction(
     buildUserPrompt(transcript, mode, intervieweeRole),
-    mode
+    mode,
   );
 }
 
@@ -545,15 +545,15 @@ export async function extractInterviewChunk(
   chunk: ExtractionChunk,
   documentName: string,
   intervieweeRole: IntervieweeRole | null = null,
-  mode: ExtractionMode = DEFAULT_EXTRACTION_MODE
+  mode: ExtractionMode = DEFAULT_EXTRACTION_MODE,
 ): Promise<ExtractionResponse> {
   const response = await requestExtraction(
     buildUserPrompt(
       `Document: ${documentName}\n${chunkProvenanceHeader(chunk)}\n\n${chunk.text}`,
       mode,
-      intervieweeRole
+      intervieweeRole,
     ),
-    mode
+    mode,
   );
   return stampChunkProvenance(response, chunk);
 }
@@ -569,7 +569,7 @@ export async function extractInterviewChunkWithFallback(
   chunk: ExtractionChunk,
   documentName: string,
   intervieweeRole: IntervieweeRole | null = null,
-  mode: ExtractionMode = DEFAULT_EXTRACTION_MODE
+  mode: ExtractionMode = DEFAULT_EXTRACTION_MODE,
 ): Promise<ExtractionResponse[]> {
   try {
     return [
@@ -583,8 +583,8 @@ export async function extractInterviewChunkWithFallback(
 
     return Promise.all(
       singlePages.map((page) =>
-        extractInterviewChunk(page, documentName, intervieweeRole, mode)
-      )
+        extractInterviewChunk(page, documentName, intervieweeRole, mode),
+      ),
     );
   }
 }
@@ -592,11 +592,14 @@ export async function extractInterviewChunkWithFallback(
 function buildUserPrompt(
   transcript: string,
   mode: ExtractionMode,
-  intervieweeRole: IntervieweeRole | null = null
+  intervieweeRole: IntervieweeRole | null = null,
 ): string {
   const prompt = mode === "full" ? FULL_USER_PROMPT : LEAN_USER_PROMPT;
   return prompt
-    .replace("{{INTERVIEWEE_ROLE_GUIDANCE}}", intervieweeRoleGuidance(intervieweeRole))
+    .replace(
+      "{{INTERVIEWEE_ROLE_GUIDANCE}}",
+      intervieweeRoleGuidance(intervieweeRole),
+    )
     .replace("{{TRANSCRIPT}}", transcript);
 }
 
@@ -672,7 +675,7 @@ function pageLabelsForChunk(chunk: ExtractionChunk): string[] {
 function addToPageIndex(
   index: PageIndex,
   text: string | null | undefined,
-  page: string
+  page: string,
 ): void {
   const key = normalizeForComparison(text ?? "");
   if (!key || !page) return;
@@ -745,7 +748,10 @@ function buildPageIndex(drafts: ExtractionResponse[]): PageIndex {
   return index;
 }
 
-function lookupPages(index: PageIndex, text: string | null | undefined): string[] {
+function lookupPages(
+  index: PageIndex,
+  text: string | null | undefined,
+): string[] {
   const key = normalizeForComparison(text ?? "");
   if (!key) return [];
   const pages = index.get(key);
@@ -766,7 +772,7 @@ function comparePageLabels(left: string, right: string): number {
  */
 function stampChunkProvenance(
   response: ExtractionResponse,
-  chunk: ExtractionChunk
+  chunk: ExtractionChunk,
 ): ExtractionResponse {
   const fallback = pageLabelsForChunk(chunk);
   // No real pagination (legacy/unpaginated source): leave sourcePages empty.
@@ -802,19 +808,19 @@ function allegationQuoteKey(allegation: AllegationItem): string {
 function addSupportingQuotes(
   index: Map<string, QuoteItem[]>,
   text: string,
-  quotes: QuoteItem[]
+  quotes: QuoteItem[],
 ): void {
   const key = normalizeForComparison(text);
   if (!key || quotes.length === 0) return;
   const existing = index.get(key) ?? [];
   index.set(
     key,
-    normalizeQuoteItems([...existing, ...quotes], SUPPORTING_QUOTE_MIN_LENGTH)
+    normalizeQuoteItems([...existing, ...quotes], SUPPORTING_QUOTE_MIN_LENGTH),
   );
 }
 
 function buildSupportingQuoteIndex(
-  drafts: ExtractionResponse[]
+  drafts: ExtractionResponse[],
 ): SupportingQuoteIndex {
   const facts = new Map<string, QuoteItem[]>();
   const events = new Map<string, QuoteItem[]>();
@@ -835,7 +841,7 @@ function buildSupportingQuoteIndex(
       addSupportingQuotes(
         allegations,
         allegationQuoteKey(allegation),
-        allegation.relevantQuotes
+        allegation.relevantQuotes,
       );
       // Witnesses also surface attached to specific allegations; index those too.
       for (const witness of allegation.witnesses) {
@@ -855,7 +861,7 @@ function buildSupportingQuoteIndex(
  */
 function backfillSupportingQuotes(
   response: ExtractionResponse,
-  index: SupportingQuoteIndex
+  index: SupportingQuoteIndex,
 ): ExtractionResponse {
   return {
     ...response,
@@ -864,30 +870,30 @@ function backfillSupportingQuotes(
       supportingQuotes:
         fact.supportingQuotes.length > 0
           ? fact.supportingQuotes
-          : index.facts.get(normalizeForComparison(fact.description)) ?? [],
+          : (index.facts.get(normalizeForComparison(fact.description)) ?? []),
     })),
     keyEvents: response.keyEvents.map((event) => ({
       ...event,
       supportingQuotes:
         event.supportingQuotes.length > 0
           ? event.supportingQuotes
-          : index.events.get(normalizeForComparison(event.description)) ?? [],
+          : (index.events.get(normalizeForComparison(event.description)) ?? []),
     })),
     potentialWitnesses: response.potentialWitnesses.map((witness) => ({
       ...witness,
       supportingQuotes:
         witness.supportingQuotes.length > 0
           ? witness.supportingQuotes
-          : index.witnesses.get(normalizeForComparison(witness.name)) ?? [],
+          : (index.witnesses.get(normalizeForComparison(witness.name)) ?? []),
     })),
     allegations: response.allegations.map((allegation) => ({
       ...allegation,
       relevantQuotes:
         allegation.relevantQuotes.length > 0
           ? allegation.relevantQuotes
-          : index.allegations.get(
-              normalizeForComparison(allegationQuoteKey(allegation))
-            ) ?? [],
+          : (index.allegations.get(
+              normalizeForComparison(allegationQuoteKey(allegation)),
+            ) ?? []),
     })),
   };
 }
@@ -899,10 +905,10 @@ function backfillSupportingQuotes(
  */
 function backfillSourcePages(
   response: ExtractionResponse,
-  index: PageIndex
+  index: PageIndex,
 ): ExtractionResponse {
   return applySourcePages(response, (text, current) =>
-    current.length > 0 ? current : lookupPages(index, text)
+    current.length > 0 ? current : lookupPages(index, text),
   );
 }
 
@@ -916,13 +922,21 @@ type PageResolver = (text: string, current: string[]) => string[];
 
 function applySourcePages(
   response: ExtractionResponse,
-  resolve: PageResolver
+  resolve: PageResolver,
 ): ExtractionResponse {
   type Evidence = { description: string; sourcePages: string[] };
   type Quote = { text: string; sourcePages: string[] };
   type Fact = Evidence & { supportingQuotes: Quote[] };
-  type Witness = { name: string; supportingQuotes: Quote[]; sourcePages: string[] };
-  type Event = { description: string; supportingQuotes: Quote[]; sourcePages: string[] };
+  type Witness = {
+    name: string;
+    supportingQuotes: Quote[];
+    sourcePages: string[];
+  };
+  type Event = {
+    description: string;
+    supportingQuotes: Quote[];
+    sourcePages: string[];
+  };
 
   const evidence = <T extends Evidence>(items: T[]): T[] =>
     items.map((item) => ({
@@ -961,7 +975,10 @@ function applySourcePages(
       contradictoryEvidence: evidence(item.contradictoryEvidence),
       relevantQuotes: quotes(item.relevantQuotes),
       witnesses: witnesses(item.witnesses),
-      sourcePages: resolve(item.allegation || item.description, item.sourcePages),
+      sourcePages: resolve(
+        item.allegation || item.description,
+        item.sourcePages,
+      ),
     }));
 
   return {
@@ -970,7 +987,7 @@ function applySourcePages(
       ...response.investigationScope,
       sourcePages: resolve(
         response.investigationScope.scopeSummary,
-        response.investigationScope.sourcePages
+        response.investigationScope.sourcePages,
       ),
     },
     allegations: allegations(response.allegations),
@@ -995,7 +1012,9 @@ function applySourcePages(
     recommendedNextInterviews: evidence(response.recommendedNextInterviews),
     riskAreas: evidence(response.riskAreas),
     findingReadiness: {
-      supportableFindings: evidence(response.findingReadiness.supportableFindings),
+      supportableFindings: evidence(
+        response.findingReadiness.supportableFindings,
+      ),
       unprovenFindings: evidence(response.findingReadiness.unprovenFindings),
       evidenceToCollect: evidence(response.findingReadiness.evidenceToCollect),
     },
@@ -1003,7 +1022,7 @@ function applySourcePages(
       ...response.interviewPosition,
       sourcePages: resolve(
         response.interviewPosition.rationale,
-        response.interviewPosition.sourcePages
+        response.interviewPosition.sourcePages,
       ),
     },
     evidenceAssessment: response.evidenceAssessment.map((item) => ({
@@ -1034,7 +1053,9 @@ function applySourcePages(
  * the group fails validation we return null so the caller re-extracts that
  * chunk from scratch rather than feeding stale data into consolidation.
  */
-export function parseStoredDrafts(drafts: unknown[]): ExtractionResponse[] | null {
+export function parseStoredDrafts(
+  drafts: unknown[],
+): ExtractionResponse[] | null {
   const parsed: ExtractionResponse[] = [];
 
   for (const draft of drafts) {
@@ -1047,10 +1068,10 @@ export function parseStoredDrafts(drafts: unknown[]): ExtractionResponse[] | nul
 }
 
 export async function verifyInterviewExtraction(
-  extractions: ExtractionResponse[]
+  extractions: ExtractionResponse[],
 ): Promise<ExtractionResponse> {
   return requestExtraction(
-    VERIFICATION_PROMPT.replace("{{DRAFTS}}", JSON.stringify(extractions))
+    VERIFICATION_PROMPT.replace("{{DRAFTS}}", JSON.stringify(extractions)),
   );
 }
 
@@ -1083,11 +1104,11 @@ export interface ConsolidationOptions {
  */
 export async function consolidateExtractions(
   drafts: ExtractionResponse[],
-  options: ConsolidationOptions = {}
+  options: ConsolidationOptions = {},
 ): Promise<ExtractionResponse> {
   if (drafts.length === 0) {
     throw new ExtractionError(
-      "No page extractions were produced, so there is nothing to consolidate."
+      "No page extractions were produced, so there is nothing to consolidate.",
     );
   }
 
@@ -1103,10 +1124,10 @@ export async function consolidateExtractions(
 }
 
 function mergeDraftsDeterministically(
-  drafts: ExtractionResponse[]
+  drafts: ExtractionResponse[],
 ): ExtractionResponse {
   const firstMetadataValue = (
-    select: (draft: ExtractionResponse) => string | null
+    select: (draft: ExtractionResponse) => string | null,
   ) => drafts.map(select).find((value) => value && value.trim()) ?? null;
 
   const investigationScopes = drafts.map((draft) => draft.investigationScope);
@@ -1122,20 +1143,24 @@ function mergeDraftsDeterministically(
       ...drafts.flatMap((draft) => draft.extractionWarnings),
       "Document-level result was consolidated deterministically to avoid long-running AI consolidation.",
     ],
+    extractionWarningReviews: [],
+    sectionReviewStates: {},
     summary: joinDistinct(drafts.map((draft) => draft.summary)),
     investigationScope: {
       primaryClaimants: investigationScopes.flatMap(
-        (scope) => scope.primaryClaimants
+        (scope) => scope.primaryClaimants,
       ),
-      primaryAccused: investigationScopes.flatMap((scope) => scope.primaryAccused),
+      primaryAccused: investigationScopes.flatMap(
+        (scope) => scope.primaryAccused,
+      ),
       scopeSummary: joinDistinct(
-        investigationScopes.map((scope) => scope.scopeSummary)
+        investigationScopes.map((scope) => scope.scopeSummary),
       ),
       primaryAllegations: investigationScopes.flatMap(
-        (scope) => scope.primaryAllegations
+        (scope) => scope.primaryAllegations,
       ),
       secondaryObservations: investigationScopes.flatMap(
-        (scope) => scope.secondaryObservations
+        (scope) => scope.secondaryObservations,
       ),
       sourcePages: investigationScopes.flatMap((scope) => scope.sourcePages),
     },
@@ -1151,34 +1176,36 @@ function mergeDraftsDeterministically(
     observations: drafts.flatMap((draft) => draft.observations),
     potentialWitnesses: drafts.flatMap((draft) => draft.potentialWitnesses),
     consolidatedWitnesses: drafts.flatMap(
-      (draft) => draft.consolidatedWitnesses
+      (draft) => draft.consolidatedWitnesses,
     ),
     missingInformation: drafts.flatMap((draft) => draft.missingInformation),
     followUpQuestions: drafts.flatMap((draft) => draft.followUpQuestions),
     recommendedNextInterviews: drafts.flatMap(
-      (draft) => draft.recommendedNextInterviews
+      (draft) => draft.recommendedNextInterviews,
     ),
     riskAreas: drafts.flatMap((draft) => draft.riskAreas),
     findingReadiness: {
       supportableFindings: findingReadinessItems.flatMap(
-        (readiness) => readiness.supportableFindings
+        (readiness) => readiness.supportableFindings,
       ),
       unprovenFindings: findingReadinessItems.flatMap(
-        (readiness) => readiness.unprovenFindings
+        (readiness) => readiness.unprovenFindings,
       ),
       evidenceToCollect: findingReadinessItems.flatMap(
-        (readiness) => readiness.evidenceToCollect
+        (readiness) => readiness.evidenceToCollect,
       ),
     },
     investigationImpact: joinDistinct(
-      drafts.map((draft) => draft.investigationImpact)
+      drafts.map((draft) => draft.investigationImpact),
     ),
     interviewPosition: {
       classification: mostSpecificInterviewPosition(interviewPositions),
       rationale: joinDistinct(
-        interviewPositions.map((position) => position.rationale)
+        interviewPositions.map((position) => position.rationale),
       ),
-      sourcePages: interviewPositions.flatMap((position) => position.sourcePages),
+      sourcePages: interviewPositions.flatMap(
+        (position) => position.sourcePages,
+      ),
     },
     evidenceAssessment: drafts.flatMap((draft) => draft.evidenceAssessment),
     pageFindings: drafts.flatMap((draft) => draft.pageFindings),
@@ -1194,25 +1221,27 @@ function joinDistinct(values: string[]): string {
 }
 
 function mostSpecificInterviewPosition(
-  positions: ExtractionResponse["interviewPosition"][]
+  positions: ExtractionResponse["interviewPosition"][],
 ): ExtractionResponse["interviewPosition"]["classification"] {
   const classifications = positions.map((position) => position.classification);
-  const priority: ExtractionResponse["interviewPosition"]["classification"][] = [
-    "Mixed / nuanced",
-    "Supports claimant",
-    "Supports accused",
-    "Neutral witness",
-    "Unknown",
-  ];
+  const priority: ExtractionResponse["interviewPosition"]["classification"][] =
+    [
+      "Mixed / nuanced",
+      "Supports claimant",
+      "Supports accused",
+      "Neutral witness",
+      "Unknown",
+    ];
   return (
-    priority.find((classification) => classifications.includes(classification)) ??
-    "Unknown"
+    priority.find((classification) =>
+      classifications.includes(classification),
+    ) ?? "Unknown"
   );
 }
 
 async function reduceDrafts(
   drafts: ExtractionResponse[],
-  options: ConsolidationOptions
+  options: ConsolidationOptions,
 ): Promise<ExtractionResponse> {
   // Small enough to merge in a single pass.
   if (drafts.length <= CONSOLIDATION_BATCH_SIZE) {
@@ -1225,7 +1254,7 @@ async function reduceDrafts(
 
   for (const [index, batch] of batches.entries()) {
     await options.onStep?.(
-      `Consolidating batch ${index + 1} of ${batches.length}`
+      `Consolidating batch ${index + 1} of ${batches.length}`,
     );
     summaries.push(await mergeBatch(batch, options));
   }
@@ -1240,7 +1269,7 @@ async function reduceDrafts(
  */
 async function mergeBatch(
   drafts: ExtractionResponse[],
-  options: ConsolidationOptions
+  options: ConsolidationOptions,
 ): Promise<ExtractionResponse> {
   try {
     return await verifyInterviewExtraction(drafts);
@@ -1267,7 +1296,7 @@ function chunkArray<T>(items: T[], size: number): T[][] {
 
 async function requestExtraction(
   prompt: string,
-  mode: ExtractionMode = DEFAULT_EXTRACTION_MODE
+  mode: ExtractionMode = DEFAULT_EXTRACTION_MODE,
 ): Promise<ExtractionResponse> {
   const { content, truncated } = await getExtractionProvider().complete({
     system: SYSTEM_PROMPT,
@@ -1285,7 +1314,7 @@ async function requestExtraction(
   if (truncated) {
     throw new ExtractionError(
       "The AI response was cut off before it finished. Try again.",
-      { recoverable: true, detail: `truncated=true, chars=${content.length}` }
+      { recoverable: true, detail: `truncated=true, chars=${content.length}` },
     );
   }
 
@@ -1295,7 +1324,7 @@ async function requestExtraction(
   } catch (error) {
     throw new ExtractionError(
       "The AI returned a response that was not valid JSON (it may have been truncated).",
-      { recoverable: true, cause: error, detail: content.slice(0, 1000) }
+      { recoverable: true, cause: error, detail: content.slice(0, 1000) },
     );
   }
 
@@ -1312,7 +1341,7 @@ async function requestExtraction(
         recoverable: true,
         cause: error,
         detail: error instanceof Error ? error.message : String(error),
-      }
+      },
     );
   }
 
@@ -1333,9 +1362,7 @@ function summarizeZodFields(error: unknown): string | null {
   for (const issue of error.issues) {
     const path = issue.path
       .map((segment) =>
-        typeof segment === "number"
-          ? `[${segment}]`
-          : `.${String(segment)}`
+        typeof segment === "number" ? `[${segment}]` : `.${String(segment)}`,
       )
       .join("")
       .replace(/^\./, "");
@@ -1348,11 +1375,11 @@ function summarizeZodFields(error: unknown): string | null {
 }
 
 function normalizeExtractionResponse(
-  extraction: ExtractionResponse
+  extraction: ExtractionResponse,
 ): ExtractionResponse {
   const peopleMentioned = normalizePersonList(extraction.peopleMentioned);
   const canonicalIdentities = normalizeIdentityItems(
-    extraction.canonicalIdentities
+    extraction.canonicalIdentities,
   );
   const interviewerNames = normalizePersonList(extraction.interviewerNames);
   const allegations = normalizeAllegations(extraction.allegations);
@@ -1363,14 +1390,20 @@ function normalizeExtractionResponse(
   const assumptions = normalizeEvidenceItems(extraction.assumptions);
   const hearsay = normalizeEvidenceItems(extraction.hearsay);
   const observations = normalizeEvidenceItems(extraction.observations);
-  const potentialWitnesses = normalizeWitnessItems(extraction.potentialWitnesses);
-  const consolidatedWitnesses = normalizeConsolidatedWitnessItems(
-    extraction.consolidatedWitnesses
+  const potentialWitnesses = normalizeWitnessItems(
+    extraction.potentialWitnesses,
   );
-  const missingInformation = normalizeEvidenceItems(extraction.missingInformation);
-  const followUpQuestions = normalizeEvidenceItems(extraction.followUpQuestions);
+  const consolidatedWitnesses = normalizeConsolidatedWitnessItems(
+    extraction.consolidatedWitnesses,
+  );
+  const missingInformation = normalizeEvidenceItems(
+    extraction.missingInformation,
+  );
+  const followUpQuestions = normalizeEvidenceItems(
+    extraction.followUpQuestions,
+  );
   const recommendedNextInterviews = normalizeEvidenceItems(
-    extraction.recommendedNextInterviews
+    extraction.recommendedNextInterviews,
   );
   const riskAreas = normalizeEvidenceItems(extraction.riskAreas);
 
@@ -1380,7 +1413,7 @@ function normalizeExtractionResponse(
     interviewerNames,
     extractionWarnings: uniqueTrimmed(extraction.extractionWarnings),
     investigationScope: normalizeInvestigationScope(
-      extraction.investigationScope
+      extraction.investigationScope,
     ),
     allegations,
     peopleMentioned,
@@ -1403,7 +1436,9 @@ function normalizeExtractionResponse(
     interviewPosition: {
       ...extraction.interviewPosition,
       rationale: extraction.interviewPosition.rationale.trim(),
-      sourcePages: normalizeSourcePages(extraction.interviewPosition.sourcePages),
+      sourcePages: normalizeSourcePages(
+        extraction.interviewPosition.sourcePages,
+      ),
     },
     evidenceAssessment: dedupeByKey(
       extraction.evidenceAssessment
@@ -1426,7 +1461,7 @@ function normalizeExtractionResponse(
         [
           normalizeForComparison(assessment.allegation),
           assessment.sourcePages.join(","),
-        ].join("|")
+        ].join("|"),
     ),
     pageFindings: extraction.pageFindings
       .map((page) => ({
@@ -1439,7 +1474,9 @@ function normalizeExtractionResponse(
         observations: normalizeEvidenceItems(page.observations),
         notableQuotes: normalizeQuoteItems(page.notableQuotes),
         supportingEvidence: normalizeEvidenceItems(page.supportingEvidence),
-        contradictoryEvidence: normalizeEvidenceItems(page.contradictoryEvidence),
+        contradictoryEvidence: normalizeEvidenceItems(
+          page.contradictoryEvidence,
+        ),
         potentialWitnesses: normalizeWitnessItems(page.potentialWitnesses),
         relevantEvents: normalizeEvents(page.relevantEvents),
       }))
@@ -1462,7 +1499,7 @@ function normalizeExtractionResponse(
  * map — then re-deduping — makes the scope arrays agree with the identities.
  */
 function applyCanonicalIdentities(
-  extraction: ExtractionResponse
+  extraction: ExtractionResponse,
 ): ExtractionResponse {
   const resolve = buildCanonicalResolver(extraction.canonicalIdentities);
 
@@ -1486,26 +1523,30 @@ function applyCanonicalIdentities(
     investigationScope: {
       ...extraction.investigationScope,
       primaryClaimants: normalizePersonList(
-        extraction.investigationScope.primaryClaimants.map(resolve)
+        extraction.investigationScope.primaryClaimants.map(resolve),
       ),
       primaryAccused: normalizePersonList(
-        extraction.investigationScope.primaryAccused.map(resolve)
+        extraction.investigationScope.primaryAccused.map(resolve),
       ),
     },
-    allegations: normalizeAllegations(renameAllegations(extraction.allegations)),
-    peopleMentioned: normalizePersonList(extraction.peopleMentioned.map(resolve)),
+    allegations: normalizeAllegations(
+      renameAllegations(extraction.allegations),
+    ),
+    peopleMentioned: normalizePersonList(
+      extraction.peopleMentioned.map(resolve),
+    ),
     keyEvents: normalizeEvents(renameEvents(extraction.keyEvents)),
     potentialWitnesses: normalizeWitnessItems(
-      renameWitnesses(extraction.potentialWitnesses)
+      renameWitnesses(extraction.potentialWitnesses),
     ),
     consolidatedWitnesses: normalizeConsolidatedWitnessItems(
-      renameWitnesses(extraction.consolidatedWitnesses)
+      renameWitnesses(extraction.consolidatedWitnesses),
     ),
     pageFindings: extraction.pageFindings.map((finding) => ({
       ...finding,
       allegations: normalizeAllegations(renameAllegations(finding.allegations)),
       potentialWitnesses: normalizeWitnessItems(
-        renameWitnesses(finding.potentialWitnesses)
+        renameWitnesses(finding.potentialWitnesses),
       ),
       relevantEvents: normalizeEvents(renameEvents(finding.relevantEvents)),
     })),
@@ -1520,7 +1561,7 @@ function applyCanonicalIdentities(
  * accents, casing, and punctuation differences still resolve.
  */
 function buildCanonicalResolver(
-  identities: IdentityItem[]
+  identities: IdentityItem[],
 ): (name: string) => string {
   const byVariant = new Map<string, string>();
   for (const identity of identities) {
@@ -1551,7 +1592,7 @@ const LEAN_ROLE_LENGTH = 80;
 const LEAN_RELEVANCE_LENGTH = 180;
 
 function applyLeanExtractionMode(
-  extraction: ExtractionResponse
+  extraction: ExtractionResponse,
 ): ExtractionResponse {
   return {
     ...extraction,
@@ -1567,7 +1608,9 @@ function applyLeanExtractionMode(
     })),
     canonicalIdentities: extraction.canonicalIdentities.map((identity) => ({
       ...identity,
-      role: identity.role ? truncateText(identity.role, LEAN_ROLE_LENGTH) : null,
+      role: identity.role
+        ? truncateText(identity.role, LEAN_ROLE_LENGTH)
+        : null,
     })),
     keyEvents: extraction.keyEvents.slice(0, LEAN_EVENT_LIMIT),
     notableQuotes: [],
@@ -1598,7 +1641,7 @@ function selectLeanWarnings(warnings: string[]): string[] {
 
 function isActionableWarning(warning: string): boolean {
   return /speaker|attribution|pagination|page|interviewee|identity|incomplete|poor|quality|unavailable|unclear|uncertain|ambiguous|missing|unreliable|conflict/i.test(
-    warning
+    warning,
   );
 }
 
@@ -1626,15 +1669,15 @@ function normalizeAllegations(allegations: AllegationItem[]): AllegationItem[] {
           allegation: allegationText,
           description,
           supportingEvidence: normalizeEvidenceItems(
-            allegation.supportingEvidence
+            allegation.supportingEvidence,
           ),
           contradictoryEvidence: normalizeEvidenceItems(
-            allegation.contradictoryEvidence
+            allegation.contradictoryEvidence,
           ),
           missingEvidence: uniqueTrimmed(allegation.missingEvidence),
           relevantQuotes: normalizeQuoteItems(
             allegation.relevantQuotes,
-            SUPPORTING_QUOTE_MIN_LENGTH
+            SUPPORTING_QUOTE_MIN_LENGTH,
           ),
           witnesses: normalizeWitnessItems(allegation.witnesses),
           followUpQuestions: uniqueTrimmed(allegation.followUpQuestions),
@@ -1650,12 +1693,12 @@ function normalizeAllegations(allegations: AllegationItem[]): AllegationItem[] {
         allegation.subject ?? "",
         normalizeForComparison(allegation.description),
         allegation.sourcePages.join(","),
-      ].join("|")
+      ].join("|"),
   );
 }
 
 function normalizeInvestigationScope(
-  scope: InvestigationScope
+  scope: InvestigationScope,
 ): InvestigationScope {
   return {
     primaryClaimants: normalizePersonList(scope.primaryClaimants),
@@ -1668,17 +1711,15 @@ function normalizeInvestigationScope(
 }
 
 function normalizeFindingReadiness(
-  findingReadiness: FindingReadiness
+  findingReadiness: FindingReadiness,
 ): FindingReadiness {
   return {
     supportableFindings: normalizeEvidenceItems(
-      findingReadiness.supportableFindings
+      findingReadiness.supportableFindings,
     ),
-    unprovenFindings: normalizeEvidenceItems(
-      findingReadiness.unprovenFindings
-    ),
+    unprovenFindings: normalizeEvidenceItems(findingReadiness.unprovenFindings),
     evidenceToCollect: normalizeEvidenceItems(
-      findingReadiness.evidenceToCollect
+      findingReadiness.evidenceToCollect,
     ),
   };
 }
@@ -1687,12 +1728,14 @@ function normalizeEvents(events: EventItem[]): EventItem[] {
   return dedupeByKey(
     events
       .map((event) => ({
+        ...event,
+        title: event.title.trim(),
         date: normalizeNullableText(event.date),
         description: event.description.trim(),
         participants: normalizePersonList(event.participants),
         supportingQuotes: normalizeQuoteItems(
           event.supportingQuotes,
-          SUPPORTING_QUOTE_MIN_LENGTH
+          SUPPORTING_QUOTE_MIN_LENGTH,
         ),
         sourcePages: normalizeSourcePages(event.sourcePages),
       }))
@@ -1703,7 +1746,7 @@ function normalizeEvents(events: EventItem[]): EventItem[] {
         normalizeForComparison(event.description),
         event.participants.map(normalizeForComparison).join(","),
         event.sourcePages.join(","),
-      ].join("|")
+      ].join("|"),
   );
 }
 
@@ -1711,14 +1754,16 @@ function normalizeEvidenceItems(items: EvidenceItem[]): EvidenceItem[] {
   return dedupeByKey(
     items
       .map((item) => ({
+        ...item,
         description: item.description.trim(),
         sourcePages: normalizeSourcePages(item.sourcePages),
       }))
       .filter((item) => item.description.length > 0),
     (item) =>
-      [normalizeForComparison(item.description), item.sourcePages.join(",")].join(
-        "|"
-      )
+      [
+        normalizeForComparison(item.description),
+        item.sourcePages.join(","),
+      ].join("|"),
   );
 }
 
@@ -1726,18 +1771,20 @@ function normalizeFactItems(items: FactItem[]): FactItem[] {
   return dedupeByKey(
     items
       .map((item) => ({
+        ...item,
         description: item.description.trim(),
         supportingQuotes: normalizeQuoteItems(
           item.supportingQuotes,
-          SUPPORTING_QUOTE_MIN_LENGTH
+          SUPPORTING_QUOTE_MIN_LENGTH,
         ),
         sourcePages: normalizeSourcePages(item.sourcePages),
       }))
       .filter((item) => item.description.length > 0),
     (item) =>
-      [normalizeForComparison(item.description), item.sourcePages.join(",")].join(
-        "|"
-      )
+      [
+        normalizeForComparison(item.description),
+        item.sourcePages.join(","),
+      ].join("|"),
   );
 }
 
@@ -1747,9 +1794,10 @@ function normalizeWitnessItems(items: WitnessItem[]): WitnessItem[] {
       .map((item) => ({
         name: normalizeMetadataName(item.name) ?? item.name.trim(),
         relevance: item.relevance.trim(),
+        relatedAllegations: uniqueTrimmed(item.relatedAllegations),
         supportingQuotes: normalizeQuoteItems(
           item.supportingQuotes,
-          SUPPORTING_QUOTE_MIN_LENGTH
+          SUPPORTING_QUOTE_MIN_LENGTH,
         ),
         sourcePages: normalizeSourcePages(item.sourcePages),
       }))
@@ -1759,12 +1807,12 @@ function normalizeWitnessItems(items: WitnessItem[]): WitnessItem[] {
         normalizeForComparison(item.name),
         normalizeForComparison(item.relevance),
         item.sourcePages.join(","),
-      ].join("|")
+      ].join("|"),
   );
 }
 
 function normalizeConsolidatedWitnessItems(
-  items: ConsolidatedWitnessItem[]
+  items: ConsolidatedWitnessItem[],
 ): ConsolidatedWitnessItem[] {
   return dedupeByKey(
     items
@@ -1783,7 +1831,7 @@ function normalizeConsolidatedWitnessItems(
         normalizeForComparison(item.name),
         normalizeForComparison(item.whyTheyMatter),
         item.sourcePages.join(","),
-      ].join("|")
+      ].join("|"),
   );
 }
 
@@ -1830,7 +1878,7 @@ function mergeIdentities(items: IdentityItem[]): IdentityItem[] {
     if (entries.length === 0) continue;
 
     const matched = groups.filter((group) =>
-      entries.some((entry) => group.displays.has(entry.key))
+      entries.some((entry) => group.displays.has(entry.key)),
     );
     const group: Group = matched[0] ?? {
       displays: new Map(),
@@ -1866,7 +1914,7 @@ function mergeIdentities(items: IdentityItem[]): IdentityItem[] {
     const canonicalName = selectCanonicalName(
       group.canonicalKeys
         .map((key) => group.displays.get(key))
-        .filter((name): name is string => Boolean(name))
+        .filter((name): name is string => Boolean(name)),
     );
     const canonicalKey = normalizeForComparison(canonicalName);
     return {
@@ -1874,7 +1922,7 @@ function mergeIdentities(items: IdentityItem[]): IdentityItem[] {
       variants: uniqueTrimmed(
         [...group.displays]
           .filter(([key]) => key !== canonicalKey)
-          .map(([, display]) => display)
+          .map(([, display]) => display),
       ),
       role: group.roles[0] ?? null,
       sourcePages: normalizeSourcePages(group.sourcePages),
@@ -1894,11 +1942,12 @@ const SUPPORTING_QUOTE_MIN_LENGTH = 2;
 
 function normalizeQuoteItems(
   quotes: QuoteItem[],
-  minLength: number = NOTABLE_QUOTE_MIN_LENGTH
+  minLength: number = NOTABLE_QUOTE_MIN_LENGTH,
 ): QuoteItem[] {
   return dedupeByKey(
     quotes
       .map((quote) => ({
+        ...quote,
         speaker: normalizeMetadataName(quote.speaker),
         text: quote.text.trim().replace(/\s+/g, " "),
         sourcePages: normalizeSourcePages(quote.sourcePages),
@@ -1909,14 +1958,12 @@ function normalizeQuoteItems(
         quote.speaker ?? "",
         normalizeForComparison(quote.text),
         quote.sourcePages.join(","),
-      ].join("|")
+      ].join("|"),
   );
 }
 
 function normalizeSourcePages(sourcePages: string[]): string[] {
-  return uniqueTrimmed(sourcePages)
-    .map(normalizeSourcePage)
-    .filter(Boolean);
+  return uniqueTrimmed(sourcePages).map(normalizeSourcePage).filter(Boolean);
 }
 
 function normalizeSourcePage(sourcePage: string): string {
@@ -1954,14 +2001,14 @@ function normalizePersonList(names: string[]): string[] {
   const accepted = candidates.filter((candidate) =>
     shouldKeepPersonCandidate(
       candidate,
-      occurrenceCounts.get(normalizeForComparison(candidate)) ?? 0
-    )
+      occurrenceCounts.get(normalizeForComparison(candidate)) ?? 0,
+    ),
   );
   const groups: string[][] = [];
 
   for (const candidate of accepted) {
     const group = groups.find((existing) =>
-      existing.some((name) => areLikelySamePerson(name, candidate))
+      existing.some((name) => areLikelySamePerson(name, candidate)),
     );
 
     if (group) {
@@ -1978,7 +2025,10 @@ function cleanPersonCandidate(value: string): string | null {
   const cleaned = value
     .replace(/\([^)]*\)/g, " ")
     .replace(/\[[^\]]*\]/g, " ")
-    .replace(/\b(?:speaker|interviewer|unknown speaker|participant)\s*\d*\b/gi, " ")
+    .replace(
+      /\b(?:speaker|interviewer|unknown speaker|participant)\s*\d*\b/gi,
+      " ",
+    )
     .replace(/\s+/g, " ")
     .trim()
     .replace(/^[^\p{L}]+|[^\p{L}]+$/gu, "");
@@ -1997,7 +2047,11 @@ function shouldKeepPersonCandidate(candidate: string, occurrenceCount: number) {
 
   const letters = Array.from(candidate.matchAll(/\p{L}/gu)).length;
   const nonSpaceChars = candidate.replace(/\s/g, "").length;
-  if (nonSpaceChars > 0 && letters / nonSpaceChars < 0.65 && occurrenceCount < 2) {
+  if (
+    nonSpaceChars > 0 &&
+    letters / nonSpaceChars < 0.65 &&
+    occurrenceCount < 2
+  ) {
     return false;
   }
 
@@ -2019,7 +2073,10 @@ function areLikelySamePerson(left: string, right: string) {
   }
 
   const sharedWords = leftWords.filter((word) => rightWords.includes(word));
-  if (sharedWords.length > 0 && levenshteinSimilarity(leftKey, rightKey) >= 0.78) {
+  if (
+    sharedWords.length > 0 &&
+    levenshteinSimilarity(leftKey, rightKey) >= 0.78
+  ) {
     return true;
   }
 
@@ -2046,14 +2103,14 @@ function normalizeQuotes(quotes: string[]): string[] {
       .map((quote) => quote.trim().replace(/\s+/g, " "))
       .filter((quote) => quote.length >= 35)
       .filter((quote) => /[.!?]"?$/.test(quote)),
-    normalizeForComparison
+    normalizeForComparison,
   );
 }
 
 function uniqueTrimmed(values: string[]) {
   return dedupeByKey(
     values.map((value) => value.trim()).filter(Boolean),
-    normalizeForComparison
+    normalizeForComparison,
   );
 }
 
@@ -2100,7 +2157,10 @@ function levenshteinSimilarity(left: string, right: string) {
 }
 
 function levenshteinDistance(left: string, right: string) {
-  const previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+  const previous = Array.from(
+    { length: right.length + 1 },
+    (_, index) => index,
+  );
   const current = Array.from({ length: right.length + 1 }, () => 0);
 
   for (let i = 1; i <= left.length; i += 1) {
@@ -2111,7 +2171,7 @@ function levenshteinDistance(left: string, right: string) {
       current[j] = Math.min(
         previous[j] + 1,
         current[j - 1] + 1,
-        previous[j - 1] + substitutionCost
+        previous[j - 1] + substitutionCost,
       );
     }
 

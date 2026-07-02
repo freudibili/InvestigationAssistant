@@ -22,12 +22,12 @@ const nullableMetadataString = z.preprocess((value) => {
 const stringWithDefault = (fallback = "") =>
   z.preprocess(
     (value) => (typeof value === "string" ? value : fallback),
-    z.string()
+    z.string(),
   );
 
 const sourcePagesSchema = z.array(z.string()).default([]);
 
-const quoteProvenanceSchema = z.object({
+const verifiedQuoteProvenanceSchema = z.object({
   id: z.string(),
   documentId: z.string(),
   quoteText: z.string(),
@@ -46,7 +46,26 @@ const quoteProvenanceSchema = z.object({
   extractionItemId: z.string(),
   supportedItemId: z.string(),
   boundingBoxes: z.null(),
+  sourceRevision: z.number().int().nonnegative().default(0),
 });
+
+const quoteProvenanceSchema = z.preprocess((value) => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  if (!("verified" in value) || value.verified !== true) return undefined;
+
+  const legacyProvenance = value as Record<string, unknown>;
+  const matchStrategy = legacyProvenance.matchStrategy;
+
+  return {
+    ...legacyProvenance,
+    matchedBy: legacyProvenance.matchedBy ?? matchStrategy,
+    sourceStatus:
+      legacyProvenance.sourceStatus ??
+      (matchStrategy === "fuzzy" ? "fuzzy_verified" : "verified"),
+    supportedItemId:
+      legacyProvenance.supportedItemId ?? legacyProvenance.extractionItemId,
+  };
+}, verifiedQuoteProvenanceSchema.optional());
 
 // The model is asked for `{ description, sourcePages }` objects, but for some
 // fields (notably findingReadiness.*) it occasionally emits a bare string —
@@ -59,7 +78,7 @@ const evidenceItemSchema = z.preprocess(
   z.object({
     description: z.string(),
     sourcePages: sourcePagesSchema,
-  })
+  }),
 );
 
 const identityItemSchema = z.object({
@@ -69,12 +88,26 @@ const identityItemSchema = z.object({
   sourcePages: sourcePagesSchema,
 });
 
-const quoteItemSchema = z.object({
-  speaker: nullableMetadataString.default(null),
-  text: z.string(),
-  sourcePages: sourcePagesSchema,
-  provenance: quoteProvenanceSchema.optional(),
-});
+const quoteItemSchema = z.preprocess(
+  (value) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+    const quote = value as Record<string, unknown>;
+    const provenance = quote.provenance as Record<string, unknown> | undefined;
+    return {
+      ...quote,
+      sourceReviewStatus:
+        quote.sourceReviewStatus ??
+        (provenance?.verified === true ? "verified" : "unlinked"),
+    };
+  },
+  z.object({
+    speaker: nullableMetadataString.default(null),
+    text: z.string(),
+    sourcePages: sourcePagesSchema,
+    provenance: quoteProvenanceSchema,
+    sourceReviewStatus: z.enum(["verified", "needs_review", "unlinked"]),
+  }),
+);
 
 // A factual statement plus the verbatim transcript quote(s) it was drawn from.
 // The supporting quote is the evidence the investigator clicks through to; the
@@ -83,19 +116,28 @@ const factItemSchema = z.object({
   description: z.string(),
   supportingQuotes: z.array(quoteItemSchema).default([]),
   sourcePages: sourcePagesSchema,
+  evidenceStatus: z
+    .enum(["supported", "unsupported", "needs_review"])
+    .default("unsupported"),
 });
 
 const eventItemSchema = z.object({
+  title: z.string().default(""),
   date: nullableMetadataString.default(null),
+  approximateDate: z.boolean().default(false),
   description: z.string(),
   participants: z.array(z.string()).default([]),
   supportingQuotes: z.array(quoteItemSchema).default([]),
   sourcePages: sourcePagesSchema,
+  evidenceStatus: z
+    .enum(["supported", "unsupported", "needs_review"])
+    .default("unsupported"),
 });
 
 const witnessItemSchema = z.object({
   name: z.string(),
   relevance: z.string(),
+  relatedAllegations: z.array(z.string()).default([]),
   supportingQuotes: z.array(quoteItemSchema).default([]),
   sourcePages: sourcePagesSchema,
 });
@@ -114,6 +156,10 @@ const allegationItemSchema = z.object({
   claimant: nullableMetadataString.default(null),
   subject: nullableMetadataString.default(null),
   classification: z.enum(["primary", "secondary"]).default("primary"),
+  relevance: z.enum(["relevant", "not_relevant"]).default("relevant"),
+  reviewStatus: z
+    .enum(["ai_generated", "edited", "approved"])
+    .default("ai_generated"),
   allegation: z.string().optional(),
   description: z.string(),
   supportingEvidence: z.array(evidenceItemSchema).default([]),
@@ -223,6 +269,22 @@ export const extractedDataSchema = z.object({
   role: nullableMetadataString,
   interviewerNames: z.array(z.string()).default([]),
   extractionWarnings: z.array(z.string()).default([]),
+  extractionWarningReviews: z
+    .array(
+      z.object({
+        warning: z.string(),
+        status: z.enum([
+          "needs_correction",
+          "accepted",
+          "not_relevant",
+          "fixed",
+        ]),
+      }),
+    )
+    .default([]),
+  sectionReviewStates: z
+    .record(z.string(), z.enum(["ai_generated", "edited", "approved"]))
+    .default({}),
   summary: stringWithDefault(""),
   investigationScope: investigationScopeSchema.default({
     primaryClaimants: [],
@@ -232,9 +294,7 @@ export const extractedDataSchema = z.object({
     secondaryObservations: [],
     sourcePages: [],
   }),
-  allegations: z
-    .array(allegationItemSchema)
-    .default([]),
+  allegations: z.array(allegationItemSchema).default([]),
   peopleMentioned: z.array(z.string()).default([]),
   canonicalIdentities: z.array(identityItemSchema).default([]),
   keyEvents: z.array(eventItemSchema).default([]),
@@ -264,6 +324,12 @@ export const extractedDataSchema = z.object({
   evidenceAssessment: z.array(investigationAssessmentSchema).default([]),
   pageFindings: z.array(pageFindingSchema).default([]),
 });
+
+export const correctedSourceTextSchema = z
+  .string()
+  .trim()
+  .min(1, "Corrected source text is required.")
+  .max(10_000_000, "Corrected source text is too large.");
 
 export type ExtractedDataInput = z.infer<typeof extractedDataSchema>;
 

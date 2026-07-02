@@ -257,30 +257,55 @@ function addDemotedItem(params: {
 
   if (params.category === "event") {
     params.keyEvents.push({
+      title: description,
       date: params.allegation.date,
+      approximateDate: false,
       description,
       participants: [params.claimant, params.subject].filter(
         (value): value is string => Boolean(value)
       ),
       supportingQuotes,
       sourcePages,
+      evidenceStatus: evidenceStatusForQuotes(supportingQuotes),
     });
     return;
   }
 
   if (params.category === "interviewee_observation") {
     params.observations.push({ description, sourcePages });
-    params.factualStatements.push({ description, supportingQuotes, sourcePages });
+    params.factualStatements.push({
+      description,
+      supportingQuotes,
+      sourcePages,
+      evidenceStatus: evidenceStatusForQuotes(supportingQuotes),
+    });
     return;
   }
 
   if (params.category === "interviewee_response_to_allegation") {
     params.opinions.push({ description, sourcePages });
-    params.factualStatements.push({ description, supportingQuotes, sourcePages });
+    params.factualStatements.push({
+      description,
+      supportingQuotes,
+      sourcePages,
+      evidenceStatus: evidenceStatusForQuotes(supportingQuotes),
+    });
     return;
   }
 
-  params.factualStatements.push({ description, supportingQuotes, sourcePages });
+  params.factualStatements.push({
+    description,
+    supportingQuotes,
+    sourcePages,
+    evidenceStatus: evidenceStatusForQuotes(supportingQuotes),
+  });
+}
+
+function evidenceStatusForQuotes(
+  quotes: QuoteItem[],
+): FactItem["evidenceStatus"] {
+  if (quotes.some((quote) => quote.provenance?.verified)) return "supported";
+  return quotes.length > 0 ? "needs_review" : "unsupported";
 }
 
 function firstVerifiedQuote(quotes: QuoteItem[]): QuoteItem | null {

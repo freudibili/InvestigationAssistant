@@ -31,6 +31,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { StatusBadge } from "@/components/documents/status-badge";
+import { ReviewStatusBadge } from "@/features/extraction/components/review-status-badge";
 import { getSupportedExtension } from "@/lib/documents";
 import {
   useDeleteDocument,
@@ -53,10 +54,11 @@ export function DocumentRow({ document }: { document: CaseDocument }) {
   const remove = useDeleteDocument(document.caseId);
   const setRole = useSetIntervieweeRole(document.caseId);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [regenerateOpen, setRegenerateOpen] = useState(false);
   const progressQuery = useDocumentProgress(
     document.caseId,
     document.id,
-    document.status === "extracting" || extract.isPending
+    document.status === "extracting" || extract.isPending,
   );
   const liveDocument = progressQuery.data ?? document;
   const isExtracting = liveDocument.status === "extracting";
@@ -67,7 +69,7 @@ export function DocumentRow({ document }: { document: CaseDocument }) {
       ? Math.round(
           (liveDocument.extractionCurrentStep /
             liveDocument.extractionTotalSteps) *
-            100
+            100,
         )
       : 8;
   const extractionSteps = getExtractionSteps(liveDocument, isExtracting);
@@ -86,7 +88,7 @@ export function DocumentRow({ document }: { document: CaseDocument }) {
       });
     } catch (error) {
       toast.error(
-        error instanceof Error ? error.message : "Could not set the role."
+        error instanceof Error ? error.message : "Could not set the role.",
       );
     }
   }
@@ -94,7 +96,7 @@ export function DocumentRow({ document }: { document: CaseDocument }) {
   async function handleExtract() {
     if (!intervieweeRole) {
       toast.error(
-        "Select the interviewee's role (claimant, accused, or reference person) first."
+        "Select the interviewee's role (claimant, accused, or reference person) first.",
       );
       return;
     }
@@ -111,9 +113,17 @@ export function DocumentRow({ document }: { document: CaseDocument }) {
       }
 
       toast.error(
-        error instanceof Error ? error.message : "Extraction failed."
+        error instanceof Error ? error.message : "Extraction failed.",
       );
     }
+  }
+
+  function requestExtraction() {
+    if (liveDocument.extractionReviewStatus !== "ai_generated") {
+      setRegenerateOpen(true);
+      return;
+    }
+    void handleExtract();
   }
 
   async function handleCancelExtraction() {
@@ -122,9 +132,7 @@ export function DocumentRow({ document }: { document: CaseDocument }) {
       toast.success("Extraction canceled.");
     } catch (error) {
       toast.error(
-        error instanceof Error
-          ? error.message
-          : "Could not cancel extraction."
+        error instanceof Error ? error.message : "Could not cancel extraction.",
       );
     }
   }
@@ -136,7 +144,7 @@ export function DocumentRow({ document }: { document: CaseDocument }) {
       toast.success("Document deleted.");
     } catch (error) {
       toast.error(
-        error instanceof Error ? error.message : "Could not delete document."
+        error instanceof Error ? error.message : "Could not delete document.",
       );
     }
   }
@@ -150,6 +158,11 @@ export function DocumentRow({ document }: { document: CaseDocument }) {
             <p className="truncate text-sm font-medium">{document.fileName}</p>
             <div className="mt-1 flex flex-wrap items-center gap-2">
               <StatusBadge status={liveDocument.status} />
+              {liveDocument.status === "extracted" ? (
+                <ReviewStatusBadge
+                  status={liveDocument.extractionReviewStatus}
+                />
+              ) : null}
               <Select
                 value={intervieweeRole ?? undefined}
                 onValueChange={handleRoleChange}
@@ -188,7 +201,7 @@ export function DocumentRow({ document }: { document: CaseDocument }) {
               <Button
                 size="sm"
                 variant="outline"
-                onClick={handleExtract}
+                onClick={requestExtraction}
                 disabled={isExtracting || isStartingExtraction}
               >
                 <RotateCcw />
@@ -212,7 +225,7 @@ export function DocumentRow({ document }: { document: CaseDocument }) {
           ) : (
             <Button
               size="sm"
-              onClick={handleExtract}
+              onClick={requestExtraction}
               disabled={isStartingExtraction || !intervieweeRole}
               title={
                 !intervieweeRole
@@ -318,6 +331,30 @@ export function DocumentRow({ document }: { document: CaseDocument }) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      <Dialog open={regenerateOpen} onOpenChange={setRegenerateOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Generate a new AI extraction?</DialogTitle>
+            <DialogDescription>
+              Investigator edits and the approved extraction will be kept. The
+              new AI result is stored separately for comparison.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRegenerateOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() => {
+                setRegenerateOpen(false);
+                void handleExtract();
+              }}
+            >
+              Generate new AI version
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -345,7 +382,7 @@ const DISPLAY_PAGES_PER_GROUP = 4;
 
 function getExtractionSteps(
   document: CaseDocument,
-  isExtracting: boolean
+  isExtracting: boolean,
 ): { label: string; status: StepStatus }[] {
   const totalSteps = document.extractionTotalSteps;
   const currentStep = document.extractionCurrentStep;
@@ -355,13 +392,14 @@ function getExtractionSteps(
   const isPreparing = /^(Prepared\b|Preparing)/i.test(currentMessage);
   const isVerifying =
     /^(Verifying|Consolidating|Grounding|Classifying|Saving|Merging|Retrying)\b/i.test(
-      currentMessage
+      currentMessage,
     );
   const isExtractingSourceUnit = /^Extracting\b/i.test(currentMessage);
   // Non-PDF uploads are converted to a paginated PDF first; surface that as the
   // leading step. The original file name keeps its extension after conversion,
   // so it reliably tells us whether this document needed converting.
-  const requiresConversion = getSupportedExtension(document.fileName) !== ".pdf";
+  const requiresConversion =
+    getSupportedExtension(document.fileName) !== ".pdf";
 
   // Before the page count is known (conversion + preparation report
   // `totalSteps: 0`), show a skeleton so the step list — and the active
@@ -408,7 +446,10 @@ function getExtractionSteps(
     firstPage <= totalPages;
     firstPage += DISPLAY_PAGES_PER_GROUP
   ) {
-    const lastPage = Math.min(firstPage + DISPLAY_PAGES_PER_GROUP - 1, totalPages);
+    const lastPage = Math.min(
+      firstPage + DISPLAY_PAGES_PER_GROUP - 1,
+      totalPages,
+    );
     let status: StepStatus = "pending";
 
     if (currentStep >= lastPage) {

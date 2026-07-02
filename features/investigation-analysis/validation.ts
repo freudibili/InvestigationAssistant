@@ -26,15 +26,28 @@ export const quoteRefSchema = z.object({
   text: z.string(),
   speaker: z.string().nullable().default(null),
   intervieweeName: z.string().nullable().default(null),
-  intervieweeRole: z.enum(["claimant", "accused", "witness"]).nullable().default(null),
+  intervieweeRole: z
+    .enum(["claimant", "accused", "witness"])
+    .nullable()
+    .default(null),
   /** 1-based PDF page, or null when the source had no real pagination. */
   page: z.number().int().positive().nullable().default(null),
   charStart: z.number().int().nonnegative().nullable().default(null),
   charEnd: z.number().int().nonnegative().nullable().default(null),
   pageCharStart: z.number().int().nonnegative().nullable().default(null),
   pageCharEnd: z.number().int().nonnegative().nullable().default(null),
-  normalizedPageCharStart: z.number().int().nonnegative().nullable().default(null),
-  normalizedPageCharEnd: z.number().int().nonnegative().nullable().default(null),
+  normalizedPageCharStart: z
+    .number()
+    .int()
+    .nonnegative()
+    .nullable()
+    .default(null),
+  normalizedPageCharEnd: z
+    .number()
+    .int()
+    .nonnegative()
+    .nullable()
+    .default(null),
   documentId: z.string(),
   documentName: z.string(),
 });
@@ -144,7 +157,7 @@ export const conductAssessmentSchema = z.object({
         rationale: z.string().default(""),
         supportingFactors: z.array(z.string()).default([]),
         missingInformation: z.array(z.string()).default([]),
-      })
+      }),
     )
     .default([]),
   mobbingFactors: z.array(mobbingFactorSchema).default([]),
@@ -154,7 +167,7 @@ export const conductAssessmentSchema = z.object({
         factor: mobbingFactorSchema,
         confidence: confidenceSchema,
         rationale: z.string().default(""),
-      })
+      }),
     )
     .default([]),
   missingInformation: z.array(z.string()).default([]),

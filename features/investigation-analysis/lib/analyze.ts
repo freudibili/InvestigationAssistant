@@ -10,7 +10,10 @@ import {
   type AnalysisResponse,
   type InvestigationAnalysis,
 } from "@/features/investigation-analysis/validation";
-import { buildAggregate, type AggregateResult } from "@/features/investigation-analysis/lib/aggregate";
+import {
+  buildAggregate,
+  type AggregateResult,
+} from "@/features/investigation-analysis/lib/aggregate";
 import { normalizeText } from "@/features/investigation-analysis/lib/catalog";
 import {
   findQuoteTextMatch,
@@ -30,7 +33,7 @@ export class AnalysisError extends Error {
 
   constructor(
     userMessage: string,
-    options: { detail?: string; cause?: unknown } = {}
+    options: { detail?: string; cause?: unknown } = {},
   ) {
     super(userMessage, options.cause ? { cause: options.cause } : undefined);
     this.name = "AnalysisError";
@@ -52,7 +55,11 @@ function buildUserPrompt(aggregate: AggregateResult): string {
     interviews: aggregate.ai.interviews,
     quotes: aggregate.ai.quotes,
     events: aggregate.ai.events,
-    witnesses: aggregate.witnesses.map((w) => w.name),
+    witnesses: aggregate.witnesses.map((witness) => ({
+      name: witness.name,
+      relatedAllegations: witness.relatedAllegations,
+      whyTheyMatter: witness.whyTheyMatter,
+    })),
   };
 
   return `Analyze this workplace investigation case grievance by grievance, the way an investigation report does.
@@ -132,7 +139,7 @@ async function requestAnalysis(prompt: string): Promise<AnalysisResponse> {
   if (truncated) {
     throw new AnalysisError(
       "The AI analysis was cut off before it finished. Try again.",
-      { detail: `truncated, chars=${content.length}` }
+      { detail: `truncated, chars=${content.length}` },
     );
   }
 
@@ -142,20 +149,23 @@ async function requestAnalysis(prompt: string): Promise<AnalysisResponse> {
   } catch (error) {
     throw new AnalysisError(
       "The AI returned a response that was not valid JSON.",
-      { cause: error, detail: content.slice(0, 1000) }
+      { cause: error, detail: content.slice(0, 1000) },
     );
   }
 
   try {
     return analysisResponseSchema.parse(parsed);
   } catch (error) {
-    throw new AnalysisError("The AI analysis did not match the expected format.", {
-      cause: error,
-      detail:
-        error instanceof ZodError
-          ? error.issues.map((i) => i.path.join(".")).join(", ")
-          : String(error),
-    });
+    throw new AnalysisError(
+      "The AI analysis did not match the expected format.",
+      {
+        cause: error,
+        detail:
+          error instanceof ZodError
+            ? error.issues.map((i) => i.path.join(".")).join(", ")
+            : String(error),
+      },
+    );
   }
 }
 
@@ -167,13 +177,13 @@ async function requestAnalysis(prompt: string): Promise<AnalysisResponse> {
  * {@link AnalysisError} on any failure.
  */
 export async function generateCaseAnalysis(
-  documents: CaseDocument[]
+  documents: CaseDocument[],
 ): Promise<InvestigationAnalysis> {
   const aggregate = buildAggregate(documents);
 
   if (aggregate.counts.interviewCount === 0) {
     throw new AnalysisError(
-      "No extracted interviews to analyze. Extract at least one document first."
+      "No extracted interviews to analyze. Extract at least one document first.",
     );
   }
 
@@ -191,20 +201,23 @@ export async function generateCaseAnalysis(
  */
 function mergeAnalysis(
   aggregate: AggregateResult,
-  ai: AnalysisResponse
+  ai: AnalysisResponse,
 ): InvestigationAnalysis {
   const roleByInterviewId = new Map(
-    aggregate.ai.interviews.map((interview) => [interview.id, interview.roleHint])
+    aggregate.ai.interviews.map((interview) => [
+      interview.id,
+      interview.roleHint,
+    ]),
   );
   const eventIds = new Set(aggregate.ai.events.map((event) => event.id));
 
   const groundedReproches = ai.reproches.filter((reproche) =>
-    isStandaloneReproche(reproche, aggregate, roleByInterviewId, eventIds)
+    isStandaloneReproche(reproche, aggregate, roleByInterviewId, eventIds),
   );
   const droppedCount = ai.reproches.length - groundedReproches.length;
   if (droppedCount > 0) {
     console.info(
-      `[analysis] dropped ${droppedCount} ungrounded or high-risk reproche(s) of ${ai.reproches.length}`
+      `[analysis] dropped ${droppedCount} ungrounded or high-risk reproche(s) of ${ai.reproches.length}`,
     );
   }
 
@@ -216,14 +229,14 @@ function mergeAnalysis(
       aggregate,
       roleByInterviewId,
       "claimant",
-      2
+      2,
     ),
     accusedStatement: sanitizeStatementQuotes(
       reproche.accusedStatement,
       aggregate,
       roleByInterviewId,
       "accused",
-      2
+      2,
     ),
     referenceStatements: reproche.referenceStatements.map((statement) =>
       sanitizeStatementQuotes(
@@ -231,15 +244,15 @@ function mergeAnalysis(
         aggregate,
         roleByInterviewId,
         "reference",
-        1
-      )
+        1,
+      ),
     ),
   }));
 
   // Map each interview to its interviewee's normalized name, then collect, per
   // person, the grievances any of their interviews participate in.
   const personKeyByInterviewId = new Map(
-    aggregate.interviews.map((i) => [i.id, normalizeText(i.name)])
+    aggregate.interviews.map((i) => [i.id, normalizeText(i.name)]),
   );
   const reprocheIdsByPersonKey = new Map<string, string[]>();
   for (const reproche of reproches) {
@@ -252,7 +265,7 @@ function mergeAnalysis(
     const personKeys = new Set(
       interviewIds
         .map((id) => personKeyByInterviewId.get(id))
-        .filter((key): key is string => Boolean(key))
+        .filter((key): key is string => Boolean(key)),
     );
     for (const key of personKeys) {
       const list = reprocheIdsByPersonKey.get(key) ?? [];
@@ -303,7 +316,7 @@ function isStandaloneReproche(
   reproche: AiReproche,
   aggregate: AggregateResult,
   roleByInterviewId: Map<string, RoleHint>,
-  eventIds: Set<string>
+  eventIds: Set<string>,
 ): boolean {
   if (
     reproche.sourceBasis === "context_only" ||
@@ -318,11 +331,22 @@ function isStandaloneReproche(
     case "explicit_accused_response":
       return hasRoleSupport(reproche, "accused", aggregate, roleByInterviewId);
     case "explicit_reference_concern":
-      return hasRoleSupport(reproche, "reference", aggregate, roleByInterviewId);
+      return hasRoleSupport(
+        reproche,
+        "reference",
+        aggregate,
+        roleByInterviewId,
+      );
     case "documented_incident":
-      return hasEventSupport(reproche, eventIds) || hasSourceBasisQuote(reproche, aggregate);
+      return (
+        hasEventSupport(reproche, eventIds) ||
+        hasSourceBasisQuote(reproche, aggregate)
+      );
     case "source_grounded_pattern":
-      return sourceSupportCount(reproche, aggregate, roleByInterviewId, eventIds) >= 2;
+      return (
+        sourceSupportCount(reproche, aggregate, roleByInterviewId, eventIds) >=
+        2
+      );
     default:
       return false;
   }
@@ -332,12 +356,12 @@ function hasRoleSupport(
   reproche: AiReproche,
   role: RoleHint,
   aggregate: AggregateResult,
-  roleByInterviewId: Map<string, RoleHint>
+  roleByInterviewId: Map<string, RoleHint>,
 ): boolean {
   const supportingInterviewIds = new Set(
     reproche.sourceBasisInterviewIds.filter(
-      (interviewId) => roleByInterviewId.get(interviewId) === role
-    )
+      (interviewId) => roleByInterviewId.get(interviewId) === role,
+    ),
   );
   if (supportingInterviewIds.size === 0) return false;
 
@@ -346,7 +370,7 @@ function hasRoleSupport(
     return Boolean(
       quote &&
         supportingInterviewIds.has(quote.documentId) &&
-        isUsableQuote(quote)
+        isUsableQuote(quote),
     );
   });
   if (hasSupportingQuote) return true;
@@ -357,8 +381,8 @@ function hasRoleSupport(
 }
 
 function hasEventSupport(reproche: AiReproche, eventIds: Set<string>): boolean {
-  return [...reproche.sourceBasisEventIds, ...reproche.relatedEventIds].some((eventId) =>
-    eventIds.has(eventId)
+  return [...reproche.sourceBasisEventIds, ...reproche.relatedEventIds].some(
+    (eventId) => eventIds.has(eventId),
   );
 }
 
@@ -366,7 +390,7 @@ function sourceSupportCount(
   reproche: AiReproche,
   aggregate: AggregateResult,
   roleByInterviewId: Map<string, RoleHint>,
-  eventIds: Set<string>
+  eventIds: Set<string>,
 ): number {
   const refs = new Set<string>();
 
@@ -396,49 +420,49 @@ function sourceSupportCount(
 
 function hasSourceBasisQuote(
   reproche: AiReproche,
-  aggregate: AggregateResult
+  aggregate: AggregateResult,
 ): boolean {
   return reproche.sourceBasisQuoteIds.some((quoteId) =>
-    isUsableQuote(aggregate.quoteById.get(quoteId))
+    isUsableQuote(aggregate.quoteById.get(quoteId)),
   );
 }
 
 function hasExtractedAllegationSupport(
   interviewIds: Set<string>,
-  aggregate: AggregateResult
+  aggregate: AggregateResult,
 ): boolean {
   return aggregate.ai.interviews.some(
     (interview) =>
-      interviewIds.has(interview.id) && interview.allegations.length > 0
+      interviewIds.has(interview.id) && interview.allegations.length > 0,
   );
 }
 
 function hasExtractedReferenceSupport(
   interviewIds: Set<string>,
-  aggregate: AggregateResult
+  aggregate: AggregateResult,
 ): boolean {
   return aggregate.ai.interviews.some(
     (interview) =>
       interviewIds.has(interview.id) &&
-      (interview.allegations.length > 0 || interview.events.length > 0)
+      (interview.allegations.length > 0 || interview.events.length > 0),
   );
 }
 
 function interviewHasExtractedSupport(
   interviewId: string,
-  aggregate: AggregateResult
+  aggregate: AggregateResult,
 ): boolean {
   return aggregate.ai.interviews.some(
     (interview) =>
       interview.id === interviewId &&
-      (interview.allegations.length > 0 || interview.events.length > 0)
+      (interview.allegations.length > 0 || interview.events.length > 0),
   );
 }
 
 function sanitizeReprocheSourceRefs(
   reproche: AiReproche,
   aggregate: AggregateResult,
-  eventIds: Set<string>
+  eventIds: Set<string>,
 ): Pick<
   AiReproche,
   "sourceBasisInterviewIds" | "sourceBasisQuoteIds" | "sourceBasisEventIds"
@@ -446,13 +470,15 @@ function sanitizeReprocheSourceRefs(
   return {
     sourceBasisInterviewIds: uniqueIds(reproche.sourceBasisInterviewIds).filter(
       (interviewId) =>
-        aggregate.ai.interviews.some((interview) => interview.id === interviewId)
+        aggregate.ai.interviews.some(
+          (interview) => interview.id === interviewId,
+        ),
     ),
-    sourceBasisQuoteIds: uniqueIds(reproche.sourceBasisQuoteIds).filter((quoteId) =>
-      isUsableQuote(aggregate.quoteById.get(quoteId))
+    sourceBasisQuoteIds: uniqueIds(reproche.sourceBasisQuoteIds).filter(
+      (quoteId) => isUsableQuote(aggregate.quoteById.get(quoteId)),
     ),
-    sourceBasisEventIds: uniqueIds(reproche.sourceBasisEventIds).filter((eventId) =>
-      eventIds.has(eventId)
+    sourceBasisEventIds: uniqueIds(reproche.sourceBasisEventIds).filter(
+      (eventId) => eventIds.has(eventId),
     ),
   };
 }
@@ -462,7 +488,7 @@ function sanitizeStatementQuotes(
   aggregate: AggregateResult,
   roleByInterviewId: Map<string, RoleHint>,
   expectedRole: RoleHint,
-  limit: number
+  limit: number,
 ): ReprocheStatement {
   if (!statement.interviewId) {
     return { ...statement, quoteIds: [] };
@@ -473,26 +499,32 @@ function sanitizeStatementQuotes(
   }
 
   const sameInterviewQuotes = aggregate.quotes.filter(
-    (quote) => quote.documentId === statement.interviewId && isUsableQuote(quote)
+    (quote) =>
+      quote.documentId === statement.interviewId && isUsableQuote(quote),
   );
   const explicitQuotes = uniqueIds(statement.quoteIds)
     .map((quoteId) => aggregate.quoteById.get(quoteId))
-    .filter(
-      (quote): quote is AggregateResult["quotes"][number] =>
-        Boolean(
-          quote &&
-            quote.documentId === statement.interviewId &&
-            isUsableQuote(quote) &&
-            findQuoteTextMatch(statement.summary, quote.text)
-        )
+    .filter((quote): quote is AggregateResult["quotes"][number] =>
+      Boolean(
+        quote &&
+          quote.documentId === statement.interviewId &&
+          isUsableQuote(quote) &&
+          findQuoteTextMatch(statement.summary, quote.text),
+      ),
     );
   const inlineQuotes = sameInterviewQuotes.filter((quote) =>
-    quoteSupportsVisibleInlineFragment(statement.summary, quote.text)
+    quoteSupportsVisibleInlineFragment(statement.summary, quote.text),
   );
   const supportedQuotes = uniqueQuotes([...inlineQuotes, ...explicitQuotes]);
   const visibleQuoteCount = inlineQuotes.length;
-  const usableQuotes = supportedQuotes.slice(0, Math.max(limit, visibleQuoteCount));
-  const summary = removeUnsupportedInlineQuotes(statement.summary, supportedQuotes);
+  const usableQuotes = supportedQuotes.slice(
+    0,
+    Math.max(limit, visibleQuoteCount),
+  );
+  const summary = removeUnsupportedInlineQuotes(
+    statement.summary,
+    supportedQuotes,
+  );
 
   return {
     ...statement,
@@ -501,7 +533,9 @@ function sanitizeStatementQuotes(
   };
 }
 
-function isUsableQuote(quote: AggregateResult["quotes"][number] | undefined): boolean {
+function isUsableQuote(
+  quote: AggregateResult["quotes"][number] | undefined,
+): boolean {
   return Boolean(quote?.provenanceId && quote.page !== null);
 }
 
@@ -509,7 +543,9 @@ function uniqueIds(ids: string[]): string[] {
   return [...new Set(ids)];
 }
 
-function uniqueQuotes<TQuote extends { id: string }>(quotes: TQuote[]): TQuote[] {
+function uniqueQuotes<TQuote extends { id: string }>(
+  quotes: TQuote[],
+): TQuote[] {
   const seen = new Set<string>();
   return quotes.filter((quote) => {
     if (seen.has(quote.id)) return false;

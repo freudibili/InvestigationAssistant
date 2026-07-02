@@ -1,40 +1,38 @@
 "use client";
 
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
   AlertTriangle,
-  BriefcaseBusiness,
   CalendarClock,
-  CircleHelp,
-  Eye,
   FileText,
   ListChecks,
-  MessageSquareQuote,
   ShieldAlert,
   UserCheck,
   Users,
 } from "lucide-react";
 import type * as React from "react";
+import { useState } from "react";
 import {
-  SourceViewerProvider,
-  useSourceViewer,
-} from "@/components/pdf/source-viewer-dialog";
+  QuoteEditorProvider,
+  useQuoteEditor,
+} from "@/features/quote-editor";
 import { getExtension, getSupportedExtension } from "@/lib/documents";
 import type { CaseDocument, ExtractedData } from "@/lib/types";
+import {
+  ExtractionReviewControls,
+  type ExtractionVersion,
+} from "@/features/extraction/components/extraction-review-controls";
+import { ExtractionSectionActions } from "@/features/extraction/components/extraction-section-actions";
 
 type QuoteItem = ExtractedData["notableQuotes"][number];
 type WitnessItem = ExtractedData["potentialWitnesses"][number];
-type EvidenceItem = ExtractedData["observations"][number];
 type SourceContext = {
   caseId: string;
   documentId: string;
+  extractionRevision: number;
   documentName: string;
+  version: ExtractionVersion;
   /**
    * Whether the stored source is a paginated PDF (native or converted). Drives
    * the empty-state wording: an uncited item on a paginated document just has no
@@ -175,7 +173,7 @@ type ClickableQuoteProvenance = QuoteProvenance & {
 };
 
 function isClickableQuoteProvenance(
-  provenance: QuoteProvenance
+  provenance: QuoteProvenance,
 ): provenance is ClickableQuoteProvenance {
   return (
     provenance.verified &&
@@ -198,7 +196,7 @@ function SourcePageBadge({
   quote?: string;
   provenance?: QuoteProvenance;
 }) {
-  const openViewer = useSourceViewer();
+  const openViewer = useQuoteEditor();
 
   return (
     <button
@@ -206,6 +204,7 @@ function SourcePageBadge({
       onClick={() =>
         openViewer?.({
           documentId: source.documentId,
+          expectedRevision: source.extractionRevision,
           caseId: source.caseId,
           documentName: source.documentName,
           label: page.label,
@@ -218,6 +217,7 @@ function SourcePageBadge({
           normalizedPageCharStart: provenance?.normalizedPageCharStart,
           normalizedPageCharEnd: provenance?.normalizedPageCharEnd,
           quote,
+          version: source.version,
         })
       }
       title={`Open ${source.documentName} at ${page.label}`}
@@ -235,7 +235,7 @@ function SourcePageBadge({
 }
 
 function parsePageReference(
-  value: string | null | undefined
+  value: string | null | undefined,
 ): PageReference | null {
   const normalized = value?.replace(/\s+/g, " ").trim();
   if (
@@ -247,9 +247,7 @@ function parsePageReference(
     return null;
   }
 
-  const pageMatch = normalized.match(
-    /\bpages?\s+(\d+)(?:\s*[-–]\s*(\d+))?\b/i
-  );
+  const pageMatch = normalized.match(/\bpages?\s+(\d+)(?:\s*[-–]\s*(\d+))?\b/i);
   if (pageMatch) {
     return {
       label: pageMatch[2]
@@ -279,13 +277,7 @@ function EmptyState({ children }: { children: string }) {
  * page badge. The quote is the evidence — the badge is attached to the quote,
  * never to a generic per-card "Sources" block.
  */
-function Quote({
-  quote,
-  source,
-}: {
-  quote: QuoteItem;
-  source: SourceContext;
-}) {
+function Quote({ quote, source }: { quote: QuoteItem; source: SourceContext }) {
   return (
     <blockquote className="border-muted-foreground/30 space-y-1.5 border-l-2 pl-3">
       <p className="text-sm italic leading-relaxed">
@@ -316,7 +308,7 @@ function QuoteList({
   source: SourceContext;
 }) {
   const verifiedQuotes = quotes.filter((quote) =>
-    quote.provenance ? isClickableQuoteProvenance(quote.provenance) : false
+    quote.provenance ? isClickableQuoteProvenance(quote.provenance) : false,
   );
 
   if (verifiedQuotes.length === 0) return <EmptyState>{empty}</EmptyState>;
@@ -330,53 +322,22 @@ function QuoteList({
   );
 }
 
-function EvidenceList({
-  items,
-  source,
-}: {
-  items: EvidenceItem[];
-  source: SourceContext;
-}) {
-  return (
-    <ul className="space-y-3 text-sm">
-      {items.map((item, index) => (
-        <li key={index} className="space-y-1.5 leading-relaxed">
-          <p>{item.description}</p>
-          <SourceBadges pages={item.sourcePages} source={source} />
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-function uniqueEvidenceItems(items: EvidenceItem[]): EvidenceItem[] {
-  const seen = new Set<string>();
-  const unique: EvidenceItem[] = [];
-
-  for (const item of items) {
-    const key = `${item.description.trim().toLowerCase()}|${item.sourcePages.join(",")}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    unique.push(item);
-  }
-
-  return unique;
-}
-
 function SectionCard({
   title,
   count,
   icon: Icon,
+  actions,
   children,
 }: {
   title: string;
   count?: number;
   icon: typeof ListChecks;
+  actions?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
     <Card>
-      <CardHeader>
+      <CardHeader className="flex-row flex-wrap items-center justify-between gap-3">
         <CardTitle className="flex items-center gap-2 text-base">
           <Icon className="size-4" />
           {title}
@@ -384,6 +345,7 @@ function SectionCard({
             <span className="text-muted-foreground font-normal">({count})</span>
           ) : null}
         </CardTitle>
+        {actions}
       </CardHeader>
       <CardContent>{children}</CardContent>
     </Card>
@@ -399,27 +361,29 @@ function CollapsibleSectionCard({
   count,
   icon: Icon,
   collapsed,
+  actions,
   children,
 }: {
   title: string;
   count: number;
   icon: typeof ListChecks;
   collapsed: boolean;
+  actions?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
     <Card>
+      <CardHeader className="flex-row flex-wrap items-center justify-between gap-3">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Icon className="size-4" />
+          {title}
+          <span className="text-muted-foreground font-normal">({count})</span>
+        </CardTitle>
+        {actions}
+      </CardHeader>
       <details open={!collapsed}>
-        <summary className="cursor-pointer list-none">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <Icon className="size-4" />
-              {title}
-              <span className="text-muted-foreground font-normal">
-                ({count})
-              </span>
-            </CardTitle>
-          </CardHeader>
+        <summary className="text-muted-foreground mx-6 mb-4 cursor-pointer text-sm">
+          Show or hide {title.toLowerCase()}
         </summary>
         <CardContent>{children}</CardContent>
       </details>
@@ -427,22 +391,32 @@ function CollapsibleSectionCard({
   );
 }
 
-export function ExtractionResult({
-  document,
-}: {
-  document: CaseDocument;
-}) {
-  const data = document.extractedData;
+export function ExtractionResult({ document }: { document: CaseDocument }) {
+  const [version, setVersion] = useState<ExtractionVersion>(
+    document.approvedExtractedData
+      ? "approved"
+      : document.investigatorExtractedData
+        ? "edited"
+        : "ai",
+  );
+  const data =
+    version === "approved"
+      ? document.approvedExtractedData
+      : version === "edited"
+        ? document.investigatorExtractedData
+        : (document.aiExtractedData ?? document.extractedData);
   // The stored object is a paginated PDF when it's a native PDF or has been
   // converted at extraction time; `fileUrl` (not `fileName`) reflects that.
   const isPdfSource = getSupportedExtension(document.fileUrl) === ".pdf";
   const source: SourceContext = {
     caseId: document.caseId,
     documentId: document.id,
+    extractionRevision: document.extractionRevision,
     // A non-PDF upload is converted to a paginated PDF at extraction time and
     // the source link/viewer serves that PDF. The original `fileName` keeps its
     // `.docx`/`.txt` extension, so surface the `.pdf` name we actually open.
     documentName: sourceDisplayName(document.fileName, isPdfSource),
+    version,
     paginationAvailable: isPdfSource,
   };
 
@@ -460,29 +434,39 @@ export function ExtractionResult({
   const extractionWarnings = data.extractionWarnings ?? [];
   const allegations = data.allegations ?? [];
   const facts = data.factualStatements ?? [];
-  const observations = data.observations ?? [];
-  const contextItems = [
-    ...(data.opinions ?? []),
-    ...(data.assumptions ?? []),
-    ...(data.hearsay ?? []),
-  ];
-  const referencedEvidence = uniqueEvidenceItems(
-    (data.pageFindings ?? []).flatMap((finding) => [
-      ...(finding.supportingEvidence ?? []),
-      ...(finding.contradictoryEvidence ?? []),
-    ])
-  );
   const peopleMentioned = data.peopleMentioned ?? [];
   const events = data.keyEvents ?? [];
   const witnesses = data.potentialWitnesses ?? [];
-  const notableQuotes = data.notableQuotes ?? [];
-  const followUpQuestions = data.followUpQuestions ?? [];
+  const sectionActions = (
+    section: Parameters<typeof ExtractionSectionActions>[0]["section"],
+    title: string,
+    allegationIndex?: number,
+  ) => (
+    <ExtractionSectionActions
+      document={document}
+      data={data}
+      version={version}
+      section={section}
+      title={title}
+      allegationIndex={allegationIndex}
+      onVersionChange={setVersion}
+    />
+  );
 
   return (
-    <SourceViewerProvider>
+    <QuoteEditorProvider onQuoteSaved={() => setVersion("edited")}>
       <div className="space-y-6">
+        <ExtractionReviewControls
+          document={document}
+          version={version}
+          onVersionChange={setVersion}
+        />
         {/* 1. Document Information */}
-        <SectionCard title="Document Information" icon={FileText}>
+        <SectionCard
+          title="Document Information"
+          icon={FileText}
+          actions={sectionActions("metadata", "document information")}
+        >
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             <Field label="File Name" value={source.documentName} />
             <Field label="Interviewee" value={data.intervieweeName} />
@@ -495,19 +479,28 @@ export function ExtractionResult({
             <Field label="Date" value={data.interviewDate} />
             <Field label="Role" value={data.role} />
           </div>
-          {extractionWarnings.length > 0 ? (
-            <div className="mt-4 border-t pt-4">
-              <p className="text-muted-foreground mb-2 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide">
-                <AlertTriangle className="size-3.5" />
-                Extraction Warnings ({extractionWarnings.length})
-              </p>
-              <ul className="list-inside list-disc space-y-1 text-sm">
-                {extractionWarnings.map((warning, i) => (
-                  <li key={i}>{warning}</li>
-                ))}
-              </ul>
-            </div>
-          ) : null}
+        </SectionCard>
+
+        <SectionCard
+          title="Extraction Warnings"
+          count={extractionWarnings.length}
+          icon={AlertTriangle}
+          actions={sectionActions("warnings", "extraction warnings")}
+        >
+          {extractionWarnings.length === 0 ? (
+            <EmptyState>No extraction warnings.</EmptyState>
+          ) : (
+            <ul className="space-y-2 text-sm">
+              {extractionWarnings.map((warning, i) => (
+                <li key={i} className="flex flex-wrap items-center gap-2">
+                  <span>{warning}</span>
+                  <Badge variant="outline">
+                    {warningReviewLabel(data, warning)}
+                  </Badge>
+                </li>
+              ))}
+            </ul>
+          )}
         </SectionCard>
 
         {/* 2. Allegations Mentioned */}
@@ -519,10 +512,27 @@ export function ExtractionResult({
           {allegations.length > 0 ? (
             <div className="space-y-4">
               {allegations.map((allegation, i) => (
-                <div key={i} className="bg-muted/30 space-y-3 rounded-lg border p-4">
-                  <p className="text-sm font-semibold leading-relaxed">
-                    {allegation.allegation || allegation.description}
-                  </p>
+                <div
+                  key={i}
+                  className="bg-muted/30 space-y-3 rounded-lg border p-4"
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <p className="text-sm font-semibold leading-relaxed">
+                      {allegation.allegation || allegation.description}
+                    </p>
+                    {sectionActions("allegations", `allegation ${i + 1}`, i)}
+                  </div>
+                  <Badge
+                    variant={
+                      allegation.relevance === "not_relevant"
+                        ? "outline"
+                        : "secondary"
+                    }
+                  >
+                    {allegation.relevance === "not_relevant"
+                      ? "Not relevant"
+                      : "Relevant"}
+                  </Badge>
                   <div className="grid gap-3 sm:grid-cols-2">
                     <Field label="Claimant" value={allegation.claimant} />
                     <Field label="Subject" value={allegation.subject} />
@@ -546,12 +556,21 @@ export function ExtractionResult({
         </SectionCard>
 
         {/* 3. Facts */}
-        <SectionCard title="Facts" count={facts.length} icon={ListChecks}>
+        <SectionCard
+          title="Facts"
+          count={facts.length}
+          icon={ListChecks}
+          actions={sectionActions("facts", "facts")}
+        >
           {facts.length > 0 ? (
             <ul className="space-y-4 text-sm">
               {facts.map((fact, i) => (
                 <li key={i} className="space-y-2 leading-relaxed">
                   <p>{fact.description}</p>
+                  <EvidenceLinkStatus
+                    status={fact.evidenceStatus}
+                    quoteCount={fact.supportingQuotes.length}
+                  />
                   {(fact.supportingQuotes ?? []).length > 0 ? (
                     <QuoteList
                       quotes={fact.supportingQuotes}
@@ -569,76 +588,93 @@ export function ExtractionResult({
           )}
         </SectionCard>
 
-        <SectionCard
-          title="Interviewee Observations"
-          count={observations.length}
-          icon={Eye}
-        >
-          {observations.length > 0 ? (
-            <EvidenceList items={observations} source={source} />
-          ) : (
-            <EmptyState>No interviewee observations extracted.</EmptyState>
-          )}
-        </SectionCard>
-
-        <SectionCard
-          title="Context"
-          count={contextItems.length}
-          icon={BriefcaseBusiness}
-        >
-          {contextItems.length > 0 ? (
-            <EvidenceList items={contextItems} source={source} />
-          ) : (
-            <EmptyState>No context items extracted.</EmptyState>
-          )}
-        </SectionCard>
-
-        <SectionCard
-          title="Referenced Evidence"
-          count={referencedEvidence.length}
-          icon={FileText}
-        >
-          {referencedEvidence.length > 0 ? (
-            <EvidenceList items={referencedEvidence} source={source} />
-          ) : (
-            <EmptyState>No referenced evidence extracted.</EmptyState>
-          )}
-        </SectionCard>
-
         {/* 4. People Mentioned */}
         <CollapsibleSectionCard
           title="People Mentioned"
           count={peopleMentioned.length}
           icon={Users}
-          collapsed={peopleMentioned.length > COLLAPSE_THRESHOLD}
+          collapsed={
+            peopleMentioned.length + witnesses.length > COLLAPSE_THRESHOLD
+          }
+          actions={sectionActions("people", "people and roles")}
         >
-          {peopleMentioned.length > 0 ? (
-            <ul className="flex flex-wrap gap-2 text-sm">
-              {peopleMentioned.map((person, i) => (
-                <li key={i}>
-                  <Badge variant="outline" className="font-normal">
-                    {person}
-                  </Badge>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <EmptyState>No people mentioned.</EmptyState>
-          )}
+          <div className="space-y-6">
+            {peopleMentioned.length > 0 ? (
+              <ul className="flex flex-wrap gap-2 text-sm">
+                {peopleMentioned.map((person, i) => (
+                  <li key={i}>
+                    <Badge variant="outline" className="font-normal">
+                      {person}
+                    </Badge>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <EmptyState>No people mentioned.</EmptyState>
+            )}
+
+            <section className="space-y-4 border-t pt-6">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <h3 className="flex items-center gap-2 text-sm font-medium">
+                  <UserCheck className="size-4" />
+                  Witnesses Mentioned
+                  <span className="text-muted-foreground font-normal">
+                    ({witnesses.length})
+                  </span>
+                </h3>
+                {sectionActions("witnesses", "witnesses")}
+              </div>
+
+              {witnesses.length > 0 ? (
+                <ul className="space-y-4 text-sm">
+                  {witnesses.map((witness: WitnessItem, i) => (
+                    <li key={i} className="space-y-2 leading-relaxed">
+                      <p>
+                        <span className="font-medium">{witness.name}</span> —{" "}
+                        {witness.relevance}
+                      </p>
+                      {(witness.supportingQuotes ?? []).length > 0 ? (
+                        <QuoteList
+                          quotes={witness.supportingQuotes}
+                          empty={NO_VERIFIED_QUOTE}
+                          source={source}
+                        />
+                      ) : (
+                        <EmptyState>{NO_VERIFIED_QUOTE}</EmptyState>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <EmptyState>No potential witnesses mentioned.</EmptyState>
+              )}
+            </section>
+          </div>
         </CollapsibleSectionCard>
 
         {/* 5. Events */}
-        <SectionCard title="Events" count={events.length} icon={CalendarClock}>
+        <SectionCard
+          title="Events"
+          count={events.length}
+          icon={CalendarClock}
+          actions={sectionActions("events", "events")}
+        >
           {events.length > 0 ? (
             <ul className="space-y-3 text-sm">
               {events.map((event, i) => (
                 <li key={i} className="space-y-1.5 leading-relaxed">
+                  {event.title ? <p className="font-medium">{event.title}</p> : null}
                   <p>
                     <span className="text-muted-foreground font-medium">
-                      {event.date ?? "Undated"}:
+                      {event.date ?? "Undated"}
+                      {event.approximateDate && event.date ? " (approximate)" : ""}:
                     </span>{" "}
                     {event.description}
                   </p>
+                  <EvidenceLinkStatus
+                    status={event.evidenceStatus}
+                    quoteCount={event.supportingQuotes.length}
+                  />
                   {(event.participants ?? []).length > 0 ? (
                     <p className="text-muted-foreground text-xs">
                       Participants: {(event.participants ?? []).join(", ")}
@@ -661,69 +697,33 @@ export function ExtractionResult({
           )}
         </SectionCard>
 
-        {/* 6. Witnesses Mentioned */}
-        <CollapsibleSectionCard
-          title="Witnesses Mentioned"
-          count={witnesses.length}
-          icon={UserCheck}
-          collapsed={witnesses.length > COLLAPSE_THRESHOLD}
-        >
-          {witnesses.length > 0 ? (
-            <ul className="space-y-4 text-sm">
-              {witnesses.map((witness: WitnessItem, i) => (
-                <li key={i} className="space-y-2 leading-relaxed">
-                  <p>
-                    <span className="font-medium">{witness.name}</span> —{" "}
-                    {witness.relevance}
-                  </p>
-                  {(witness.supportingQuotes ?? []).length > 0 ? (
-                    <QuoteList
-                      quotes={witness.supportingQuotes}
-                      empty={NO_VERIFIED_QUOTE}
-                      source={source}
-                    />
-                  ) : (
-                    <EmptyState>{NO_VERIFIED_QUOTE}</EmptyState>
-                  )}
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <EmptyState>No potential witnesses mentioned.</EmptyState>
-          )}
-        </CollapsibleSectionCard>
-
-        {/* 7. Relevant Quotes */}
-        <CollapsibleSectionCard
-          title="Relevant Quotes"
-          count={notableQuotes.length}
-          icon={MessageSquareQuote}
-          collapsed={notableQuotes.length > COLLAPSE_THRESHOLD}
-        >
-          <QuoteList
-            quotes={notableQuotes}
-            empty={NO_VERIFIED_QUOTE}
-            source={source}
-          />
-        </CollapsibleSectionCard>
-
-        {/* 8. Follow-up Questions */}
-        <SectionCard
-          title="Follow-up Questions"
-          count={followUpQuestions.length}
-          icon={CircleHelp}
-        >
-          {followUpQuestions.length > 0 ? (
-            <ul className="list-inside list-disc space-y-2 text-sm leading-relaxed">
-              {followUpQuestions.map((question, i) => (
-                <li key={i}>{question.description}</li>
-              ))}
-            </ul>
-          ) : (
-            <EmptyState>No follow-up questions suggested.</EmptyState>
-          )}
-        </SectionCard>
       </div>
-    </SourceViewerProvider>
+    </QuoteEditorProvider>
   );
+}
+
+function EvidenceLinkStatus({
+  status,
+  quoteCount,
+}: {
+  status: "supported" | "unsupported" | "needs_review";
+  quoteCount: number;
+}) {
+  const label =
+    status === "supported"
+      ? `${quoteCount} verified source quote${quoteCount === 1 ? "" : "s"}`
+      : status === "needs_review"
+        ? "Linked evidence needs review"
+        : "Unsupported / no linked quote";
+  return <p className="text-muted-foreground text-xs">{label}</p>;
+}
+
+function warningReviewLabel(data: ExtractedData, warning: string): string {
+  const status = data.extractionWarningReviews.find(
+    (review) => review.warning === warning,
+  )?.status;
+  if (status === "accepted") return "Accepted despite warning";
+  if (status === "not_relevant") return "Not relevant";
+  if (status === "fixed") return "Fixed";
+  return "Needs correction";
 }

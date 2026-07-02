@@ -22,7 +22,7 @@ const reportGenerationStaleAfterMs = 10 * 60 * 1000;
 
 export function useCaseAnalysis(
   caseId: string,
-  initialData?: CaseAnalysisResponse
+  initialData?: CaseAnalysisResponse,
 ) {
   return useQuery({
     queryKey: queryKeys.analysis(caseId),
@@ -44,7 +44,7 @@ export function useCaseAnalysis(
 }
 
 function isReportGenerationRunning(
-  analysis: InvestigationAnalysis | null | undefined
+  analysis: InvestigationAnalysis | null | undefined,
 ): boolean {
   return (
     analysis?.reportGeneration.status === "generating" &&
@@ -78,15 +78,17 @@ export function useAnalyzeCase(caseId: string) {
     onMutate: async () => {
       await queryClient.cancelQueries({ queryKey: queryKeys.analysis(caseId) });
       const previousAnalysisState =
-        queryClient.getQueryData<CaseAnalysisResponse>(queryKeys.analysis(caseId));
+        queryClient.getQueryData<CaseAnalysisResponse>(
+          queryKeys.analysis(caseId),
+        );
 
       queryClient.setQueryData<CaseAnalysisResponse>(
         queryKeys.analysis(caseId),
-        () => ({
+        (current) => ({
+          ...(current ?? emptyAnalysisResponse),
           status: "analyzing",
           generatedAt: null,
-          analysis: null,
-        })
+        }),
       );
 
       return { previousAnalysisState };
@@ -94,12 +96,14 @@ export function useAnalyzeCase(caseId: string) {
     onSuccess: (analysis) => {
       queryClient.setQueryData<CaseAnalysisResponse>(
         queryKeys.analysis(caseId),
-        {
+        (current) => ({
+          ...(current ?? emptyAnalysisResponse),
           status: "ready",
           generatedAt: analysis.generatedAt,
           analysis,
-        }
+        }),
       );
+      queryClient.invalidateQueries({ queryKey: queryKeys.analysis(caseId) });
     },
     onError: (error, _variables, context) => {
       queryClient.setQueryData<CaseAnalysisResponse>(
@@ -120,6 +124,9 @@ export function useAnalyzeCase(caseId: string) {
               : "failed";
 
           return {
+            ...(current ??
+              context?.previousAnalysisState ??
+              emptyAnalysisResponse),
             status,
             generatedAt:
               context?.previousAnalysisState?.generatedAt ??
@@ -130,7 +137,7 @@ export function useAnalyzeCase(caseId: string) {
               current?.analysis ??
               null,
           };
-        }
+        },
       );
     },
     onSettled: (_data, error) => {
@@ -151,20 +158,22 @@ export function useCancelAnalysis(caseId: string) {
       queryClient.setQueryData<CaseAnalysisResponse>(
         queryKeys.analysis(caseId),
         (current) => ({
+          ...(current ?? emptyAnalysisResponse),
           status: "canceled",
           generatedAt: current?.generatedAt ?? null,
           analysis: current?.analysis ?? null,
-        })
+        }),
       );
     },
     onSuccess: (state) => {
       queryClient.setQueryData<CaseAnalysisResponse>(
         queryKeys.analysis(caseId),
         (current) => ({
+          ...(current ?? emptyAnalysisResponse),
           status: state.status,
           generatedAt: state.generatedAt,
           analysis: current?.analysis ?? null,
-        })
+        }),
       );
     },
     onSettled: (_data, error) => {
@@ -174,3 +183,9 @@ export function useCancelAnalysis(caseId: string) {
     },
   });
 }
+
+const emptyAnalysisResponse: CaseAnalysisResponse = {
+  status: "idle",
+  generatedAt: null,
+  analysis: null,
+};

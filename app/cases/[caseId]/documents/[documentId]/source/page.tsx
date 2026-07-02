@@ -6,10 +6,12 @@ import { SourcePageViewer } from "@/components/pdf/source-page-viewer";
 import { Button } from "@/components/ui/button";
 import { getDocument } from "@/lib/db/documents";
 import { findQuoteProvenanceById } from "@/features/extraction/lib/quote-grounding";
+import { getDocumentExtractionVersion } from "@/lib/db/documents";
+import { CONTENT_VERSIONS, type ContentVersion } from "@/lib/types";
 
 type SourcePageProps = {
   params: Promise<{ caseId: string; documentId: string }>;
-  searchParams: Promise<{ quoteId?: string; page?: string }>;
+  searchParams: Promise<{ quoteId?: string; page?: string; version?: string }>;
 };
 
 export default async function SourcePage({
@@ -26,8 +28,14 @@ export default async function SourcePage({
     notFound();
   }
 
+  const version = CONTENT_VERSIONS.includes(query.version as ContentVersion)
+    ? (query.version as ContentVersion)
+    : undefined;
   const provenance = query.quoteId
-    ? findQuoteProvenanceById(document.extractedData, query.quoteId)
+    ? findQuoteProvenanceById(
+        getDocumentExtractionVersion(document, version),
+        query.quoteId,
+      )
     : null;
   const hasClickableQuote =
     Boolean(provenance?.verified && provenance.pageNumber) &&
@@ -77,6 +85,7 @@ export default async function SourcePage({
           normalizedPageCharStart={provenance?.normalizedPageCharStart}
           normalizedPageCharEnd={provenance?.normalizedPageCharEnd}
           quote={provenance?.quoteText}
+          version={version}
         />
       )}
     </main>

@@ -18,6 +18,16 @@ export default async function DocumentResultPage({
 
   if (!document || document.caseId !== caseId) notFound();
 
+  const reviewDocument = {
+    ...document,
+    rawText: null,
+    originalRawText: null,
+    correctedRawText: null,
+    aiRawText: null,
+    approvedRawText: null,
+    extractedData: null,
+  };
+
   return (
     <div className="space-y-6">
       <Link
@@ -38,7 +48,7 @@ export default async function DocumentResultPage({
         <StatusBadge status={document.status} />
       </div>
 
-      <ExtractionResult document={document} />
+      <ExtractionResult document={reviewDocument} />
     </div>
   );
 }

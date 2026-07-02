@@ -29,6 +29,7 @@ export type QuoteProvenance = {
   extractionItemId: string;
   supportedItemId: string;
   boundingBoxes: null;
+  sourceRevision: number;
 };
 
 type CanonicalPage = {
@@ -36,6 +37,10 @@ type CanonicalPage = {
   text: string;
   charStart: number;
   charEnd: number;
+  // Offset in the original (page-markered) raw text where this page's trimmed
+  // content begins. Canonical char N inside the page maps 1:1 to raw char
+  // `rawStart + (N - charStart)`, because trimming only strips the page edges.
+  rawStart: number;
   normalizedText: string;
   normalizedChars: NormalizedChar[];
 };
@@ -76,10 +81,14 @@ export async function groundExtractionQuotes(params: {
   documentId: string;
   rawText: string;
   extractedData: ExtractedData;
+  preserveUnverifiedQuotes?: boolean;
+  sourceRevision?: number;
 }): Promise<ExtractedData> {
   const index = buildCanonicalIndex(params.rawText);
   if (!index.hasReliablePagination) {
-    throw new Error("Cannot ground quotes because source text is not paginated.");
+    throw new Error(
+      "Cannot ground quotes because source text is not paginated.",
+    );
   }
 
   const locatedByQuote = new Map<string, LocatedQuote | null>();
@@ -87,7 +96,7 @@ export async function groundExtractionQuotes(params: {
 
   const groundQuote = async (
     quote: QuoteWithProvenance,
-    supportedItemId: string
+    supportedItemId: string,
   ): Promise<QuoteWithProvenance | null> => {
     sequence += 1;
     const id = `${params.documentId}:quote:${sequence}`;
@@ -109,6 +118,7 @@ export async function groundExtractionQuotes(params: {
     const groundedQuote = {
       ...quote,
       text: sourceTextForLocatedQuote(index, located),
+      sourceReviewStatus: "verified" as const,
     };
 
     const provenance = buildProvenance({
@@ -117,6 +127,7 @@ export async function groundExtractionQuotes(params: {
       supportedItemId,
       index,
       located,
+      sourceRevision: params.sourceRevision ?? 0,
     });
 
     if (!provenance) {
@@ -138,6 +149,7 @@ export async function groundExtractionQuotes(params: {
     supportedItemId: "notableQuotes",
     index,
     groundQuote,
+    preserveUnverifiedQuotes: params.preserveUnverifiedQuotes ?? false,
   });
 
   data.factualStatements = await mapSequential(
@@ -150,19 +162,33 @@ export async function groundExtractionQuotes(params: {
         supportedItemId: `factualStatements.${factIndex}`,
         index,
         groundQuote,
+        preserveUnverifiedQuotes: params.preserveUnverifiedQuotes ?? false,
       }),
-    })
+    }),
   );
 
-  data.keyEvents = await mapSequential(data.keyEvents ?? [], async (event, eventIndex) => ({
-    ...event,
-    supportingQuotes: await groundQuoteList(event.supportingQuotes ?? [], {
-      itemDescription: event.description,
-      itemSourcePages: event.sourcePages,
-      supportedItemId: `keyEvents.${eventIndex}`,
-      index,
-      groundQuote,
+  data.keyEvents = await mapSequential(
+    data.keyEvents ?? [],
+    async (event, eventIndex) => ({
+      ...event,
+      supportingQuotes: await groundQuoteList(event.supportingQuotes ?? [], {
+        itemDescription: event.description,
+        itemSourcePages: event.sourcePages,
+        supportedItemId: `keyEvents.${eventIndex}`,
+        index,
+        groundQuote,
+        preserveUnverifiedQuotes: params.preserveUnverifiedQuotes ?? false,
+      }),
     }),
+  );
+
+  data.factualStatements = data.factualStatements.map((fact) => ({
+    ...fact,
+    evidenceStatus: evidenceStatusForQuotes(fact.supportingQuotes),
+  }));
+  data.keyEvents = data.keyEvents.map((event) => ({
+    ...event,
+    evidenceStatus: evidenceStatusForQuotes(event.supportingQuotes),
   }));
 
   data.potentialWitnesses = await mapSequential(
@@ -175,8 +201,9 @@ export async function groundExtractionQuotes(params: {
         supportedItemId: `potentialWitnesses.${witnessIndex}`,
         index,
         groundQuote,
+        preserveUnverifiedQuotes: params.preserveUnverifiedQuotes ?? false,
       }),
-    })
+    }),
   );
 
   data.allegations = await mapSequential(
@@ -189,21 +216,27 @@ export async function groundExtractionQuotes(params: {
         supportedItemId: `allegations.${allegationIndex}`,
         index,
         groundQuote,
+        preserveUnverifiedQuotes: params.preserveUnverifiedQuotes ?? false,
       }),
       witnesses: await mapSequential(
         allegation.witnesses ?? [],
         async (witness, witnessIndex) => ({
           ...witness,
-          supportingQuotes: await groundQuoteList(witness.supportingQuotes ?? [], {
-            itemDescription: `${witness.name}: ${witness.relevance}`,
-            itemSourcePages: witness.sourcePages,
-            supportedItemId: `allegations.${allegationIndex}.witnesses.${witnessIndex}`,
-            index,
-            groundQuote,
-          }),
-        })
+          supportingQuotes: await groundQuoteList(
+            witness.supportingQuotes ?? [],
+            {
+              itemDescription: `${witness.name}: ${witness.relevance}`,
+              itemSourcePages: witness.sourcePages,
+              supportedItemId: `allegations.${allegationIndex}.witnesses.${witnessIndex}`,
+              index,
+              groundQuote,
+              preserveUnverifiedQuotes:
+                params.preserveUnverifiedQuotes ?? false,
+            },
+          ),
+        }),
       ),
-    })
+    }),
   );
 
   data.pageFindings = await mapSequential(
@@ -216,47 +249,63 @@ export async function groundExtractionQuotes(params: {
         supportedItemId: `pageFindings.${pageFindingIndex}.notableQuotes`,
         index,
         groundQuote,
+        preserveUnverifiedQuotes: params.preserveUnverifiedQuotes ?? false,
       }),
       allegations: await mapSequential(
         pageFinding.allegations ?? [],
         async (allegation, allegationIndex) => ({
           ...allegation,
-          relevantQuotes: await groundQuoteList(allegation.relevantQuotes ?? [], {
-            itemDescription: allegation.allegation || allegation.description,
-            itemSourcePages: allegation.sourcePages,
-            supportedItemId: `pageFindings.${pageFindingIndex}.allegations.${allegationIndex}`,
-            index,
-            groundQuote,
-          }),
-        })
+          relevantQuotes: await groundQuoteList(
+            allegation.relevantQuotes ?? [],
+            {
+              itemDescription: allegation.allegation || allegation.description,
+              itemSourcePages: allegation.sourcePages,
+              supportedItemId: `pageFindings.${pageFindingIndex}.allegations.${allegationIndex}`,
+              index,
+              groundQuote,
+              preserveUnverifiedQuotes:
+                params.preserveUnverifiedQuotes ?? false,
+            },
+          ),
+        }),
       ),
       potentialWitnesses: await mapSequential(
         pageFinding.potentialWitnesses ?? [],
         async (witness, witnessIndex) => ({
           ...witness,
-          supportingQuotes: await groundQuoteList(witness.supportingQuotes ?? [], {
-            itemDescription: `${witness.name}: ${witness.relevance}`,
-            itemSourcePages: witness.sourcePages,
-            supportedItemId: `pageFindings.${pageFindingIndex}.potentialWitnesses.${witnessIndex}`,
-            index,
-            groundQuote,
-          }),
-        })
+          supportingQuotes: await groundQuoteList(
+            witness.supportingQuotes ?? [],
+            {
+              itemDescription: `${witness.name}: ${witness.relevance}`,
+              itemSourcePages: witness.sourcePages,
+              supportedItemId: `pageFindings.${pageFindingIndex}.potentialWitnesses.${witnessIndex}`,
+              index,
+              groundQuote,
+              preserveUnverifiedQuotes:
+                params.preserveUnverifiedQuotes ?? false,
+            },
+          ),
+        }),
       ),
       relevantEvents: await mapSequential(
         pageFinding.relevantEvents ?? [],
         async (event, eventIndex) => ({
           ...event,
-          supportingQuotes: await groundQuoteList(event.supportingQuotes ?? [], {
-            itemDescription: event.description,
-            itemSourcePages: event.sourcePages,
-            supportedItemId: `pageFindings.${pageFindingIndex}.relevantEvents.${eventIndex}`,
-            index,
-            groundQuote,
-          }),
-        })
+          supportingQuotes: await groundQuoteList(
+            event.supportingQuotes ?? [],
+            {
+              itemDescription: event.description,
+              itemSourcePages: event.sourcePages,
+              supportedItemId: `pageFindings.${pageFindingIndex}.relevantEvents.${eventIndex}`,
+              index,
+              groundQuote,
+              preserveUnverifiedQuotes:
+                params.preserveUnverifiedQuotes ?? false,
+            },
+          ),
+        }),
       ),
-    })
+    }),
   );
 
   return data;
@@ -269,19 +318,29 @@ type GroundQuoteListParams = {
   index: CanonicalIndex;
   groundQuote: (
     quote: QuoteWithProvenance,
-    supportedItemId: string
+    supportedItemId: string,
   ) => Promise<QuoteWithProvenance | null>;
+  preserveUnverifiedQuotes: boolean;
 };
 
 async function groundQuoteList(
   quotes: QuoteWithProvenance[],
-  params: GroundQuoteListParams
+  params: GroundQuoteListParams,
 ): Promise<QuoteWithProvenance[]> {
-  const grounded = (
-    await mapSequential(quotes, (quote) =>
-      params.groundQuote(quote, params.supportedItemId)
-    )
-  ).filter((quote): quote is QuoteWithProvenance => Boolean(quote));
+  const results = await mapSequential(quotes, (quote) =>
+    params.groundQuote(quote, params.supportedItemId),
+  );
+
+  if (params.preserveUnverifiedQuotes) {
+    return results.map(
+      (groundedQuote, index) =>
+        groundedQuote ?? removeQuoteProvenance(quotes[index]),
+    );
+  }
+
+  const grounded = results.filter((quote): quote is QuoteWithProvenance =>
+    Boolean(quote),
+  );
 
   if (grounded.length > 0) return grounded;
   if (quotes.length === 0) return [];
@@ -299,16 +358,36 @@ async function groundQuoteList(
       speaker: null,
       text: replacement,
       sourcePages: params.itemSourcePages,
+      sourceReviewStatus: "unlinked",
     },
-    params.supportedItemId
+    params.supportedItemId,
   );
 
   return groundedReplacement ? [groundedReplacement] : [];
 }
 
+function removeQuoteProvenance(
+  quote: QuoteWithProvenance,
+): QuoteWithProvenance {
+  const { provenance: _provenance, ...unverifiedQuote } = quote;
+  return { ...unverifiedQuote, sourceReviewStatus: "needs_review" };
+}
+
+function evidenceStatusForQuotes(
+  quotes: QuoteWithProvenance[],
+): "supported" | "unsupported" | "needs_review" {
+  if (quotes.length === 0) return "unsupported";
+  return quotes.every(
+    (quote) =>
+      quote.sourceReviewStatus === "verified" && quote.provenance?.verified,
+  )
+    ? "supported"
+    : "needs_review";
+}
+
 async function mapSequential<T, U>(
   items: T[],
-  map: (item: T, index: number) => Promise<U>
+  map: (item: T, index: number) => Promise<U>,
 ): Promise<U[]> {
   const mapped: U[] = [];
   for (const [index, item] of items.entries()) {
@@ -351,17 +430,18 @@ async function findReplacementQuote(params: {
 
 function sourceWindowForPages(
   index: CanonicalIndex,
-  sourcePages: string[]
+  sourcePages: string[],
 ): string {
   const pages = estimatedPages(index, sourcePages);
-  const text = pages.length > 0 ? pages.map((page) => page.text).join("\n\n") : index.text;
+  const text =
+    pages.length > 0 ? pages.map((page) => page.text).join("\n\n") : index.text;
   return text.slice(0, RETRY_SOURCE_WINDOW_MAX_LENGTH).trim();
 }
 
 function logRejectedQuote(
   documentId: string,
   supportedItemId: string,
-  quoteText: string
+  quoteText: string,
 ): void {
   console.warn("[quote-grounding] rejected unverified quote", {
     documentId,
@@ -372,14 +452,14 @@ function logRejectedQuote(
 
 function sourceTextForLocatedQuote(
   index: CanonicalIndex,
-  located: LocatedQuote
+  located: LocatedQuote,
 ): string {
   return index.text.slice(located.charStart, located.charEnd).trim();
 }
 
 export function findQuoteProvenanceById(
   extractedData: ExtractedData | null,
-  quoteId: string
+  quoteId: string,
 ): QuoteProvenance | null {
   if (!extractedData) return null;
   let found: QuoteProvenance | null = null;
@@ -395,30 +475,32 @@ export function findQuoteProvenanceById(
 
 function visitExtractionQuotes(
   data: ExtractedData,
-  visit: (quote: QuoteWithProvenance) => void
+  visit: (quote: QuoteWithProvenance) => void,
 ): void {
   data.notableQuotes?.forEach(visit);
-  data.factualStatements?.forEach((fact) => fact.supportingQuotes?.forEach(visit));
+  data.factualStatements?.forEach((fact) =>
+    fact.supportingQuotes?.forEach(visit),
+  );
   data.keyEvents?.forEach((event) => event.supportingQuotes?.forEach(visit));
   data.potentialWitnesses?.forEach((witness) =>
-    witness.supportingQuotes?.forEach(visit)
+    witness.supportingQuotes?.forEach(visit),
   );
   data.allegations?.forEach((allegation) => {
     allegation.relevantQuotes?.forEach(visit);
     allegation.witnesses?.forEach((witness) =>
-      witness.supportingQuotes?.forEach(visit)
+      witness.supportingQuotes?.forEach(visit),
     );
   });
   data.pageFindings?.forEach((pageFinding) => {
     pageFinding.notableQuotes?.forEach(visit);
     pageFinding.allegations?.forEach((allegation) =>
-      allegation.relevantQuotes?.forEach(visit)
+      allegation.relevantQuotes?.forEach(visit),
     );
     pageFinding.potentialWitnesses?.forEach((witness) =>
-      witness.supportingQuotes?.forEach(visit)
+      witness.supportingQuotes?.forEach(visit),
     );
     pageFinding.relevantEvents?.forEach((event) =>
-      event.supportingQuotes?.forEach(visit)
+      event.supportingQuotes?.forEach(visit),
     );
   });
 }
@@ -445,9 +527,10 @@ function buildCanonicalIndex(rawText: string): CanonicalIndex {
     const start = (match.index ?? 0) + match[0].length;
     const end =
       index + 1 < matches.length
-        ? matches[index + 1].index ?? rawText.length
+        ? (matches[index + 1].index ?? rawText.length)
         : rawText.length;
-    const pageText = rawText.slice(start, end).trim();
+    const rawPageText = rawText.slice(start, end);
+    const pageText = rawPageText.trim();
     if (!pageText) return;
 
     if (parts.length > 0) {
@@ -456,6 +539,7 @@ function buildCanonicalIndex(rawText: string): CanonicalIndex {
     }
 
     const charStart = cursor;
+    const leadingTrimmed = rawPageText.length - rawPageText.trimStart().length;
     const normalizedChars = normalizeWithMap(pageText);
     parts.push(pageText);
     cursor += pageText.length;
@@ -464,6 +548,7 @@ function buildCanonicalIndex(rawText: string): CanonicalIndex {
       text: pageText,
       charStart,
       charEnd: cursor,
+      rawStart: start + leadingTrimmed,
       normalizedText: normalizedChars.map((item) => item.value).join(""),
       normalizedChars,
     });
@@ -481,10 +566,64 @@ function buildCanonicalIndex(rawText: string): CanonicalIndex {
   };
 }
 
+export type RawOffsetRange = {
+  rawStart: number;
+  rawEnd: number;
+  canonicalText: string;
+};
+
+/**
+ * Build a reusable mapper from canonical-index char ranges — the coordinate
+ * space quote provenance (`charStart`/`charEnd`) is stored in — back to char
+ * offsets in the original page-markered raw text. Quote offsets are computed
+ * against the canonical text (page markers stripped, each page trimmed, pages
+ * rejoined with "\n\n"), so they cannot be used to slice the raw text directly.
+ *
+ * The canonical index is built once per call, so a caller correcting several
+ * quotes against the same raw text reuses the returned mapper instead of
+ * re-normalizing the whole document for each quote. The mapper returns null when
+ * a range falls outside any page or straddles a page break.
+ */
+export function createRawOffsetMapper(
+  rawText: string,
+): (canonicalStart: number, canonicalEnd: number) => RawOffsetRange | null {
+  const index = buildCanonicalIndex(rawText);
+  // No reliable pagination: canonical text is `rawText.trim()`, so every offset
+  // shifts by the stripped leading whitespace.
+  const leadingWhitespace = rawText.length - rawText.trimStart().length;
+
+  return (canonicalStart, canonicalEnd) => {
+    if (canonicalStart < 0 || canonicalEnd <= canonicalStart) return null;
+    if (canonicalEnd > index.text.length) return null;
+    const canonicalText = index.text.slice(canonicalStart, canonicalEnd);
+
+    if (index.pages.length === 0) {
+      return {
+        rawStart: leadingWhitespace + canonicalStart,
+        rawEnd: leadingWhitespace + canonicalEnd,
+        canonicalText,
+      };
+    }
+
+    const page = index.pages.find(
+      (candidate) =>
+        canonicalStart >= candidate.charStart &&
+        canonicalEnd <= candidate.charEnd,
+    );
+    if (!page) return null;
+
+    return {
+      rawStart: page.rawStart + (canonicalStart - page.charStart),
+      rawEnd: page.rawStart + (canonicalEnd - page.charStart),
+      canonicalText,
+    };
+  };
+}
+
 function locateQuote(
   index: CanonicalIndex,
   quoteText: string,
-  sourcePages: string[]
+  sourcePages: string[],
 ): LocatedQuote | null {
   for (const candidate of quoteCandidates(quoteText)) {
     const exact = findExactMatch(index, candidate, sourcePages);
@@ -503,18 +642,18 @@ function quoteCandidates(quoteText: string): string[] {
   const trimmed = quoteText.trim();
   const withoutSpeaker = trimmed.replace(
     /^[\p{L}\p{M}][\p{L}\p{M}\s.'’-]{1,80}:\s*/u,
-    ""
+    "",
   );
   return [trimmed, withoutSpeaker].filter(
     (candidate, index, candidates) =>
-      candidate.length > 0 && candidates.indexOf(candidate) === index
+      candidate.length > 0 && candidates.indexOf(candidate) === index,
   );
 }
 
 function findExactMatch(
   index: CanonicalIndex,
   quoteText: string,
-  sourcePages: string[]
+  sourcePages: string[],
 ): Pick<LocatedQuote, "charStart" | "charEnd"> | null {
   const matches = findAllOccurrences(index.text, quoteText);
   return chooseMatch(index, matches, sourcePages, quoteText.length);
@@ -523,21 +662,29 @@ function findExactMatch(
 function findNormalizedMatch(
   index: CanonicalIndex,
   quoteText: string,
-  sourcePages: string[]
+  sourcePages: string[],
 ): Pick<LocatedQuote, "charStart" | "charEnd"> | null {
-  const normalizedQuote = normalizeWithMap(quoteText).map((item) => item.value).join("");
+  const normalizedQuote = normalizeWithMap(quoteText)
+    .map((item) => item.value)
+    .join("");
   if (!normalizedQuote) return null;
 
-  const normalizedMatches = findAllOccurrences(index.normalizedText, normalizedQuote);
+  const normalizedMatches = findAllOccurrences(
+    index.normalizedText,
+    normalizedQuote,
+  );
   const matches = normalizedMatches
     .map((start) => {
       const first = index.normalizedChars[start];
       const last = index.normalizedChars[start + normalizedQuote.length - 1];
       if (!first || !last) return null;
-      return { charStart: first.originalIndex, charEnd: last.originalIndex + 1 };
+      return {
+        charStart: first.originalIndex,
+        charEnd: last.originalIndex + 1,
+      };
     })
     .filter((match): match is Pick<LocatedQuote, "charStart" | "charEnd"> =>
-      Boolean(match)
+      Boolean(match),
     );
 
   return chooseLocatedMatch(index, matches, sourcePages);
@@ -546,7 +693,7 @@ function findNormalizedMatch(
 function findFuzzyMatch(
   index: CanonicalIndex,
   quoteText: string,
-  sourcePages: string[]
+  sourcePages: string[],
 ): LocatedQuote | null {
   const normalizedQuote = normalizeComparable(quoteText);
   if (normalizedQuote.length < 12) return null;
@@ -580,7 +727,10 @@ function findFuzzyMatch(
 
         const candidate = pageValue.slice(start, start + length);
         const confidence = similarity(normalizedQuote, candidate);
-        if (confidence < FUZZY_THRESHOLD || confidence <= (best?.confidence ?? 0)) {
+        if (
+          confidence < FUZZY_THRESHOLD ||
+          confidence <= (best?.confidence ?? 0)
+        ) {
           continue;
         }
 
@@ -607,18 +757,16 @@ function buildProvenance(params: {
   supportedItemId: string;
   index: CanonicalIndex;
   located: LocatedQuote;
+  sourceRevision: number;
 }): QuoteProvenance | null {
-  const page =
-    params.index.hasReliablePagination
-      ? pageContainingOffset(params.index, params.located.charStart)
-      : null;
+  const page = params.index.hasReliablePagination
+    ? pageContainingOffset(params.index, params.located.charStart)
+    : null;
 
   if (!page) return null;
 
-  const pageCharStart =
-    params.located.charStart - page.charStart;
-  const pageCharEnd =
-    params.located.charEnd - page.charStart;
+  const pageCharStart = params.located.charStart - page.charStart;
+  const pageCharEnd = params.located.charEnd - page.charStart;
   const quoteText = sourceTextForLocatedQuote(params.index, params.located);
   const sourceStatus =
     params.located.matchStrategy === "fuzzy" ? "fuzzy_verified" : "verified";
@@ -632,10 +780,11 @@ function buildProvenance(params: {
     charEnd: params.located.charEnd,
     pageCharStart,
     pageCharEnd,
-    normalizedPageCharStart:
-      normalizeComparable(page.text.slice(0, pageCharStart)).length,
-    normalizedPageCharEnd:
-      normalizeComparable(page.text.slice(0, pageCharEnd)).length,
+    normalizedPageCharStart: normalizeComparable(
+      page.text.slice(0, pageCharStart),
+    ).length,
+    normalizedPageCharEnd: normalizeComparable(page.text.slice(0, pageCharEnd))
+      .length,
     matchStrategy: params.located.matchStrategy,
     matchedBy: params.located.matchStrategy,
     confidence: params.located.confidence,
@@ -644,22 +793,24 @@ function buildProvenance(params: {
     extractionItemId: params.supportedItemId,
     supportedItemId: params.supportedItemId,
     boundingBoxes: null,
+    sourceRevision: params.sourceRevision,
   };
 }
 
 function pageContainingOffset(
   index: CanonicalIndex,
-  offset: number
+  offset: number,
 ): CanonicalPage | null {
   return (
-    index.pages.find((page) => offset >= page.charStart && offset < page.charEnd) ??
-    null
+    index.pages.find(
+      (page) => offset >= page.charStart && offset < page.charEnd,
+    ) ?? null
   );
 }
 
 function estimatedPages(
   index: CanonicalIndex,
-  sourcePages: string[]
+  sourcePages: string[],
 ): CanonicalPage[] {
   const pageNumbers = new Set<number>();
   for (const sourcePage of sourcePages) {
@@ -679,23 +830,27 @@ function chooseMatch(
   index: CanonicalIndex,
   starts: number[],
   sourcePages: string[],
-  length: number
+  length: number,
 ): Pick<LocatedQuote, "charStart" | "charEnd"> | null {
-  const matches = starts.map((start) => ({ charStart: start, charEnd: start + length }));
+  const matches = starts.map((start) => ({
+    charStart: start,
+    charEnd: start + length,
+  }));
   return chooseLocatedMatch(index, matches, sourcePages);
 }
 
 function chooseLocatedMatch(
   index: CanonicalIndex,
   matches: Array<Pick<LocatedQuote, "charStart" | "charEnd">>,
-  sourcePages: string[]
+  sourcePages: string[],
 ): Pick<LocatedQuote, "charStart" | "charEnd"> | null {
   if (matches.length === 0) return null;
   const pageHints = estimatedPages(index, sourcePages);
   const hinted = matches.find((match) =>
     pageHints.some(
-      (page) => match.charStart >= page.charStart && match.charStart < page.charEnd
-    )
+      (page) =>
+        match.charStart >= page.charStart && match.charStart < page.charEnd,
+    ),
   );
   return hinted ?? matches[0];
 }

@@ -75,6 +75,21 @@ export const ANALYSIS_STATUSES = [
 /** Lifecycle of a case's cross-interview Investigation Analysis. */
 export type AnalysisStatus = (typeof ANALYSIS_STATUSES)[number];
 
+export const EXTRACTION_REVIEW_STATUSES = [
+  "ai_generated",
+  "edited",
+  "needs_review",
+  "approved",
+  "excluded",
+] as const;
+
+export type ExtractionReviewStatus =
+  (typeof EXTRACTION_REVIEW_STATUSES)[number];
+
+export const CONTENT_VERSIONS = ["ai", "edited", "approved"] as const;
+
+export type ContentVersion = (typeof CONTENT_VERSIONS)[number];
+
 /** Structured data returned by the AI extraction step. */
 export type ExtractedData = z.infer<typeof extractedDataSchema>;
 
@@ -110,6 +125,10 @@ export interface CaseDocument {
   caseId: string;
   fileName: string;
   fileUrl: string;
+  originalFileUrl: string;
+  correctedFileUrl: string;
+  aiFileUrl: string | null;
+  approvedFileUrl: string | null;
   status: DocumentStatus;
   /**
    * The investigator-assigned party role for this interviewee, or null when not
@@ -118,7 +137,19 @@ export interface CaseDocument {
    */
   intervieweeRole: IntervieweeRole | null;
   rawText: string | null;
+  originalRawText: string | null;
+  correctedRawText: string | null;
+  correctedSourceRevision: number;
+  aiRawText: string | null;
+  approvedRawText: string | null;
   extractedData: ExtractedData | null;
+  aiExtractedData: ExtractedData | null;
+  investigatorExtractedData: ExtractedData | null;
+  approvedExtractedData: ExtractedData | null;
+  extractionReviewStatus: ExtractionReviewStatus;
+  extractionEditedAt: string | null;
+  extractionApprovedAt: string | null;
+  extractionRevision: number;
   extractionCurrentStep: number;
   extractionTotalSteps: number;
   extractionStep: string | null;

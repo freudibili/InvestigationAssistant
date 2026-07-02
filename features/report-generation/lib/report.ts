@@ -1,6 +1,9 @@
 import "server-only";
 
-import type { InvestigationAnalysis, Reproche } from "@/features/investigation-analysis/types";
+import type {
+  InvestigationAnalysis,
+  Reproche,
+} from "@/features/investigation-analysis/types";
 import {
   reportDraftSchema,
   type ReportDraft,
@@ -15,7 +18,7 @@ export class ReportGenerationError extends Error {
 
   constructor(
     userMessage: string,
-    options: { detail?: string; cause?: unknown } = {}
+    options: { detail?: string; cause?: unknown } = {},
   ) {
     super(userMessage, options.cause ? { cause: options.cause } : undefined);
     this.name = "ReportGenerationError";
@@ -49,13 +52,13 @@ export async function generateReportDraft(
   options: {
     language?: ReportLanguage;
     onStep?: (step: ReportGenerationStep) => Promise<void> | void;
-  } = {}
+  } = {},
 ): Promise<ReportDraft> {
   const { analysis } = input;
   const copy = getReportCopy(options.language ?? "en");
 
   if (analysis.reproches.length === 0) {
-    throw new ReportGenerationError("No approved allegations are available.");
+    throw new ReportGenerationError("No allegations are available.");
   }
 
   await options.onStep?.(REPORT_GENERATION_STEPS[0]);
@@ -68,25 +71,22 @@ export async function generateReportDraft(
   const globalAssessmentSection = buildGlobalAssessmentSection(analysis, copy);
 
   await options.onStep?.(REPORT_GENERATION_STEPS[3]);
-  const sections = [
+  const sections = sanitizeReportSections([
     ...frameworkSections,
     allegationsSection,
     globalAssessmentSection,
-  ];
-  const content = renderReportSections(sections)
-    .split("\n")
-    .map((line) => cleanDashboardOnlyContent(line))
-    .join("\n")
-    .replace(/[ \t]+\n/g, "\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
+  ]);
+  const content = renderReportSections(sections);
 
   await options.onStep?.(REPORT_GENERATION_STEPS[4]);
   const issues = findDashboardOnlyContentIssues(content);
   if (issues.length > 0) {
-    throw new ReportGenerationError("The report draft needs cleanup before it can be saved.", {
-      detail: JSON.stringify(issues),
-    });
+    throw new ReportGenerationError(
+      "The report draft needs cleanup before it can be saved.",
+      {
+        detail: JSON.stringify(issues),
+      },
+    );
   }
 
   return reportDraftSchema.parse({
@@ -99,16 +99,44 @@ export async function generateReportDraft(
 }
 
 function buildFrameworkSections(
-  _input: ReportGenerationInput,
-  copy: ReportCopy
+  input: ReportGenerationInput,
+  copy: ReportCopy,
 ): ReportSection[] {
+  const { investigationCase, documents, analysis } = input;
+  const extractedDocuments = documents.filter(
+    (document) =>
+      document.status === "extracted" &&
+      document.extractionReviewStatus === "approved",
+  );
+  const documentLines = extractedDocuments.map(
+    (document) =>
+      `- ${document.fileName}${document.intervieweeRole ? ` (${document.intervieweeRole})` : ""}`,
+  );
+  const interviewLines = analysis.interviews.map(
+    (interview) => `- ${interview.name} (${interview.documentName})`,
+  );
+  const missingLimits = uniqueStrings([
+    ...analysis.gaps.missingInterviews,
+    ...analysis.gaps.missingEvidence,
+    ...analysis.gaps.missingClarification,
+  ]);
+  const contradictionLines = findContradictionLines(analysis.reproches);
+  const partyLines = analysis.mainParties.map((party) =>
+    [party.canonicalName, party.caseRole, party.jobRole]
+      .filter(Boolean)
+      .join(" - "),
+  );
+
   return [
     createSection({
       number: "1",
       title: copy.initialSituation,
       type: "manual",
       source: "caseMetadata",
-      content: "",
+      content: copy.caseIntro(
+        investigationCase.title,
+        investigationCase.companyName,
+      ),
       placeholder: copy.initialSituationPlaceholder,
     }),
     createSection({
@@ -124,7 +152,7 @@ function buildFrameworkSections(
           title: copy.mandate,
           type: "manual",
           source: "template",
-          content: "",
+          content: copy.mandateContent,
           placeholder: copy.mandatePlaceholder,
         }),
         createSection({
@@ -132,7 +160,17 @@ function buildFrameworkSections(
           title: copy.procedure,
           type: "manual",
           source: "caseMetadata",
-          content: "",
+          content: [
+            copy.procedureIntro,
+            documentLines.length > 0
+              ? [copy.documentsUsed, ...documentLines].join("\n")
+              : copy.noDocuments,
+            interviewLines.length > 0
+              ? [copy.interviewsUsed, ...interviewLines].join("\n")
+              : "",
+          ]
+            .filter(Boolean)
+            .join("\n\n"),
           placeholder: copy.procedurePlaceholder,
         }),
         createSection({
@@ -140,7 +178,15 @@ function buildFrameworkSections(
           title: copy.investigationLimits,
           type: "manual",
           source: "analysis",
-          content: "",
+          content: [
+            copy.limitsIntro,
+            missingLimits.length > 0
+              ? [
+                  copy.identifiedLimits,
+                  ...missingLimits.map((item) => `- ${item}`),
+                ].join("\n")
+              : copy.noAdditionalLimits,
+          ].join("\n\n"),
           placeholder: copy.limitsPlaceholder,
         }),
       ],
@@ -158,7 +204,7 @@ function buildFrameworkSections(
           title: copy.mobbingBossing,
           type: "manual",
           source: "template",
-          content: "",
+          content: copy.mobbingDefinition,
           placeholder: copy.mobbingDefinitionPlaceholder,
         }),
         createSection({
@@ -166,7 +212,14 @@ function buildFrameworkSections(
           title: copy.contradictoryStatements,
           type: "manual",
           source: "analysis",
-          content: "",
+          content: [
+            copy.contradictoryDefinition,
+            contradictionLines.length > 0
+              ? [copy.contradictionsIdentified, ...contradictionLines].join(
+                  "\n",
+                )
+              : copy.noContradictions,
+          ].join("\n\n"),
           placeholder: copy.contradictoryDefinitionPlaceholder,
         }),
       ],
@@ -176,7 +229,15 @@ function buildFrameworkSections(
       title: copy.companyContext,
       type: "manual",
       source: "caseMetadata",
-      content: "",
+      content: [
+        copy.company(investigationCase.companyName),
+        partyLines.length > 0
+          ? [
+              copy.partiesIdentified,
+              ...partyLines.map((line) => `- ${line}`),
+            ].join("\n")
+          : copy.noParties,
+      ].join("\n\n"),
       placeholder: copy.companyContextPlaceholder,
     }),
   ];
@@ -184,7 +245,7 @@ function buildFrameworkSections(
 
 function buildAllegationsSection(
   reproches: Reproche[],
-  copy: ReportCopy
+  copy: ReportCopy,
 ): ReportSection {
   return createSection({
     number: "5",
@@ -193,7 +254,7 @@ function buildAllegationsSection(
     source: "analysis",
     content: copy.allegationsIntro,
     children: reproches.map((reproche, index) =>
-      buildAllegationSection(reproche, index + 1, copy)
+      buildAllegationSection(reproche, index + 1, copy),
     ),
   });
 }
@@ -201,7 +262,7 @@ function buildAllegationsSection(
 function buildAllegationSection(
   reproche: Reproche,
   number: number,
-  copy: ReportCopy
+  copy: ReportCopy,
 ): ReportSection {
   const findingsIndex = 3 + reproche.referenceStatements.length;
   const sectionNumber = `5.${number}`;
@@ -234,7 +295,7 @@ function buildAllegationSection(
           type: "generated",
           source: "analysis",
           content: statementText(statement.summary, copy),
-        })
+        }),
       ),
       createSection({
         number: `${sectionNumber}.${findingsIndex}`,
@@ -273,14 +334,18 @@ function formatFindingsAndEvaluation(reproche: Reproche): string {
       : "";
   const evaluation = cleanDashboardOnlyContent(reproche.evaluation).trim();
 
-  return [findings, evaluation ? paragraph(evaluation) : ""].filter(Boolean).join("\n\n");
+  return [findings, evaluation ? paragraph(evaluation) : ""]
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 function buildGlobalAssessmentSection(
   analysis: InvestigationAnalysis,
-  copy: ReportCopy
+  copy: ReportCopy,
 ): ReportSection {
-  const globalAssessment = cleanDashboardOnlyContent(analysis.globalAssessment).trim();
+  const globalAssessment = cleanDashboardOnlyContent(
+    analysis.globalAssessment,
+  ).trim();
 
   return createSection({
     number: "6",
@@ -297,15 +362,25 @@ export function renderReportSections(sections: ReportSection[]): string {
   return sections.map(renderReportSection).filter(Boolean).join("\n\n");
 }
 
+function sanitizeReportSections(sections: ReportSection[]): ReportSection[] {
+  return sections.map((section) => ({
+    ...section,
+    title: cleanDashboardOnlyContent(section.title),
+    content: cleanDashboardOnlyContent(section.content),
+    editedContent:
+      typeof section.editedContent === "string"
+        ? cleanDashboardOnlyContent(section.editedContent)
+        : section.editedContent,
+    children: sanitizeReportSections(section.children ?? []),
+  }));
+}
+
 function renderReportSection(section: ReportSection): string {
   const body = (section.editedContent ?? section.content).trim();
-  const children = section.children?.map(renderReportSection).filter(Boolean) ?? [];
+  const children =
+    section.children?.map(renderReportSection).filter(Boolean) ?? [];
 
-  return [
-    `${section.number} ${section.title}`,
-    body,
-    ...children,
-  ]
+  return [`${section.number} ${section.title}`, body, ...children]
     .filter(Boolean)
     .join("\n\n");
 }
@@ -346,6 +421,11 @@ type ReportCopy = {
   noParties: string;
   noAccount: string;
   noGlobalAssessment: string;
+  mandateContent: string;
+  procedureIntro: string;
+  limitsIntro: string;
+  mobbingDefinition: string;
+  contradictoryDefinition: string;
   initialSituationPlaceholder: string;
   factFindingFrameworkPlaceholder: string;
   mandatePlaceholder: string;
@@ -355,6 +435,8 @@ type ReportCopy = {
   mobbingDefinitionPlaceholder: string;
   contradictoryDefinitionPlaceholder: string;
   companyContextPlaceholder: string;
+  caseIntro: (title: string, companyName: string) => string;
+  company: (companyName: string) => string;
   numberedReferenceDeclaration: (index: number) => string;
 };
 
@@ -384,14 +466,27 @@ const englishReportCopy: ReportCopy = {
   documentsUsed: "Documents and interviews used:",
   interviewsUsed: "Interview accounts used:",
   identifiedLimits: "Identified limits and missing elements:",
-  contradictionsIdentified: "Contradictory points identified in the case analysis:",
+  contradictionsIdentified:
+    "Contradictory points identified in the case analysis:",
   partiesIdentified: "Parties and roles identified in the case analysis:",
   noDocuments: "No extracted document summary is available in the case file.",
-  noAdditionalLimits: "No additional investigation limits were recorded in the case analysis.",
-  noContradictions: "The case analysis does not identify a specific word-against-word configuration beyond the contradictions addressed in the individual allegations.",
+  noAdditionalLimits:
+    "No additional investigation limits were recorded in the case analysis.",
+  noContradictions:
+    "The case analysis does not identify a specific word-against-word configuration beyond the contradictions addressed in the individual allegations.",
   noParties: "No party information is available in the case analysis.",
   noAccount: "No account on record.",
   noGlobalAssessment: "No global assessment is available in the case analysis.",
+  mandateContent:
+    "The mandate section is to be completed by the investigator with the formal mandate, date, scope, and mandating person or body.",
+  procedureIntro:
+    "This draft is based on the case analysis and the extracted case material available in the file.",
+  limitsIntro:
+    "This draft formats the case analysis into a report structure. It does not add facts, allegations, credibility findings, or legal conclusions.",
+  mobbingDefinition:
+    "Mobbing or bossing generally refers to repeated or systematic conduct over time that may affect a person's dignity, work situation, social relations, professional reputation, or health. This section is conceptual and does not establish that such conduct occurred.",
+  contradictoryDefinition:
+    "Where accounts differ, the report distinguishes between what each person states and what the collected elements allow establishing. Unresolved contradictions remain identified as disputed points.",
   initialSituationPlaceholder:
     "Complete the initial situation, background, and relevant chronology.",
   factFindingFrameworkPlaceholder:
@@ -402,15 +497,18 @@ const englishReportCopy: ReportCopy = {
     "Describe the investigative steps, reviewed documents, and interviews conducted.",
   limitsPlaceholder:
     "Describe the limits of the investigation, unavailable material, or unresolved points.",
-  legalBasisPlaceholder:
-    "Add the applicable legal or internal framework.",
+  legalBasisPlaceholder: "Add the applicable legal or internal framework.",
   mobbingDefinitionPlaceholder:
     "Add the applicable definition or reference text.",
   contradictoryDefinitionPlaceholder:
     "Add the method used to address contradictory statements.",
   companyContextPlaceholder:
     "Complete the relevant company context, roles, reporting lines, and organizational background.",
-  numberedReferenceDeclaration: (index) => `Reference person declaration ${index}`,
+  caseIntro: (title, companyName) =>
+    `This draft report concerns the case "${title}" at ${companyName}.`,
+  company: (companyName) => `Company: ${companyName}.`,
+  numberedReferenceDeclaration: (index) =>
+    `Reference person declaration ${index}`,
 };
 
 const frenchReportCopy: ReportCopy = {
@@ -434,14 +532,30 @@ const frenchReportCopy: ReportCopy = {
   documentsUsed: "Documents et entretiens utilisés :",
   interviewsUsed: "Comptes rendus d’entretien utilisés :",
   identifiedLimits: "Limites et éléments manquants identifiés :",
-  contradictionsIdentified: "Points contradictoires identifiés dans l’analyse du dossier :",
+  contradictionsIdentified:
+    "Points contradictoires identifiés dans l’analyse du dossier :",
   partiesIdentified: "Parties et rôles identifiés dans l’analyse du dossier :",
-  noDocuments: "Aucun résumé de document extrait n’est disponible dans le dossier.",
-  noAdditionalLimits: "Aucune limite d’enquête supplémentaire n’a été enregistrée dans l’analyse du dossier.",
-  noContradictions: "L’analyse du dossier n’identifie pas de configuration spécifique de parole contre parole au-delà des contradictions examinées dans les reproches individuels.",
-  noParties: "Aucune information sur les parties n’est disponible dans l’analyse du dossier.",
+  noDocuments:
+    "Aucun résumé de document extrait n’est disponible dans le dossier.",
+  noAdditionalLimits:
+    "Aucune limite d’enquête supplémentaire n’a été enregistrée dans l’analyse du dossier.",
+  noContradictions:
+    "L’analyse du dossier n’identifie pas de configuration spécifique de parole contre parole au-delà des contradictions examinées dans les reproches individuels.",
+  noParties:
+    "Aucune information sur les parties n’est disponible dans l’analyse du dossier.",
   noAccount: "Aucune déclaration n’est disponible dans le dossier.",
-  noGlobalAssessment: "Aucune appréciation globale n’est disponible dans l’analyse du dossier.",
+  noGlobalAssessment:
+    "Aucune appréciation globale n’est disponible dans l’analyse du dossier.",
+  mandateContent:
+    "La section relative au mandat doit être complétée par l’enquêteur avec le mandat formel, la date, le périmètre et la personne ou l’organe mandant.",
+  procedureIntro:
+    "Ce projet est fondé sur l’analyse du dossier et sur les éléments extraits disponibles.",
+  limitsIntro:
+    "Ce projet ne réanalyse pas le dossier. Il place l’analyse dans une structure de rapport. Il n’ajoute aucun fait, reproche, élément d’appréciation de crédibilité ou conclusion juridique.",
+  mobbingDefinition:
+    "Le mobbing ou bossing renvoie généralement à des comportements répétés ou systématiques dans la durée, susceptibles d’affecter la dignité, la situation de travail, les relations sociales, la réputation professionnelle ou la santé d’une personne. Cette section est conceptuelle et ne constate pas que de tels comportements sont établis.",
+  contradictoryDefinition:
+    "Lorsque les versions divergent, le rapport distingue ce que chaque personne déclare de ce que les éléments recueillis permettent d’établir. Les contradictions non résolues restent identifiées comme des points disputés.",
   initialSituationPlaceholder:
     "Compléter la situation initiale, le contexte et la chronologie utile.",
   factFindingFrameworkPlaceholder:
@@ -452,14 +566,16 @@ const frenchReportCopy: ReportCopy = {
     "Décrire les démarches effectuées, les documents examinés et les entretiens menés.",
   limitsPlaceholder:
     "Décrire les limites de l’enquête, les éléments indisponibles ou les points non résolus.",
-  legalBasisPlaceholder:
-    "Ajouter le cadre juridique ou interne applicable.",
+  legalBasisPlaceholder: "Ajouter le cadre juridique ou interne applicable.",
   mobbingDefinitionPlaceholder:
     "Ajouter la définition applicable ou le texte de référence.",
   contradictoryDefinitionPlaceholder:
     "Ajouter la méthode retenue pour traiter les déclarations contradictoires.",
   companyContextPlaceholder:
     "Compléter le contexte de l’entreprise, les rôles, les lignes hiérarchiques et les éléments organisationnels utiles.",
+  caseIntro: (title, companyName) =>
+    `Ce projet de rapport concerne le dossier « ${title} » auprès de ${companyName}.`,
+  company: (companyName) => `Entreprise : ${companyName}.`,
   numberedReferenceDeclaration: (index) =>
     `Déclaration de la personne de référence ${index}`,
 };
@@ -487,12 +603,25 @@ const germanReportCopy: ReportCopy = {
   identifiedLimits: "Identifizierte Grenzen und fehlende Elemente:",
   contradictionsIdentified: "Widersprüchliche Punkte aus der Fallanalyse:",
   partiesIdentified: "In der Fallanalyse identifizierte Parteien und Rollen:",
-  noDocuments: "Im Dossier ist keine extrahierte Dokumentenzusammenfassung verfügbar.",
-  noAdditionalLimits: "In der Fallanalyse wurden keine zusätzlichen Abklärungsgrenzen festgehalten.",
-  noContradictions: "Die Fallanalyse identifiziert keine spezifische Aussage-gegen-Aussage-Konstellation über die in den einzelnen Vorwürfen behandelten Widersprüche hinaus.",
+  noDocuments:
+    "Im Dossier ist keine extrahierte Dokumentenzusammenfassung verfügbar.",
+  noAdditionalLimits:
+    "In der Fallanalyse wurden keine zusätzlichen Abklärungsgrenzen festgehalten.",
+  noContradictions:
+    "Die Fallanalyse identifiziert keine spezifische Aussage-gegen-Aussage-Konstellation über die in den einzelnen Vorwürfen behandelten Widersprüche hinaus.",
   noParties: "In der Fallanalyse sind keine Angaben zu den Parteien verfügbar.",
   noAccount: "Im Dossier ist keine Aussage verfügbar.",
   noGlobalAssessment: "In der Fallanalyse ist keine Gesamtwürdigung verfügbar.",
+  mandateContent:
+    "Der Abschnitt zum Mandat ist durch die untersuchende Person mit dem formellen Mandat, dem Datum, dem Umfang sowie der mandatierenden Person oder Stelle zu ergänzen.",
+  procedureIntro:
+    "Dieser Entwurf stützt sich auf die Fallanalyse und die verfügbaren extrahierten Elemente im Dossier.",
+  limitsIntro:
+    "Dieser Entwurf nimmt keine erneute Analyse des Dossiers vor. Er überführt die Analyse in eine Berichtsstruktur. Er fügt keine neuen Tatsachen, Vorwürfe, Glaubwürdigkeitsbewertungen oder rechtlichen Schlussfolgerungen hinzu.",
+  mobbingDefinition:
+    "Mobbing oder Bossing bezeichnet allgemein wiederholte oder systematische Verhaltensweisen über eine gewisse Dauer, die die Würde, Arbeitssituation, sozialen Beziehungen, berufliche Reputation oder Gesundheit einer Person beeinträchtigen können. Dieser Abschnitt ist begrifflich und stellt nicht fest, dass ein solches Verhalten vorliegt.",
+  contradictoryDefinition:
+    "Wenn Aussagen voneinander abweichen, unterscheidet der Bericht zwischen dem, was die einzelnen Personen erklären, und dem, was die erhobenen Elemente feststellen lassen. Nicht aufgelöste Widersprüche bleiben als strittige Punkte ausgewiesen.",
   initialSituationPlaceholder:
     "Ausgangslage, Hintergrund und relevante Chronologie ergänzen.",
   factFindingFrameworkPlaceholder:
@@ -511,7 +640,11 @@ const germanReportCopy: ReportCopy = {
     "Methode zum Umgang mit widersprüchlichen Aussagen ergänzen.",
   companyContextPlaceholder:
     "Relevanten Unternehmenskontext, Rollen, Berichtslinien und organisatorische Hintergründe ergänzen.",
-  numberedReferenceDeclaration: (index) => `Aussage der Referenzperson ${index}`,
+  caseIntro: (title, companyName) =>
+    `Dieser Berichtsentwurf betrifft das Dossier "${title}" bei ${companyName}.`,
+  company: (companyName) => `Unternehmen: ${companyName}.`,
+  numberedReferenceDeclaration: (index) =>
+    `Aussage der Referenzperson ${index}`,
 };
 
 function findContradictionLines(reproches: Reproche[]): string[] {
@@ -521,11 +654,7 @@ function findContradictionLines(reproches: Reproche[]): string[] {
 }
 
 function hasContradiction(reproche: Reproche): boolean {
-  const text = [
-    reproche.verdict,
-    reproche.evaluation,
-    ...reproche.findings,
-  ]
+  const text = [reproche.verdict, reproche.evaluation, ...reproche.findings]
     .join(" ")
     .toLowerCase();
 
@@ -554,7 +683,10 @@ function cleanDashboardOnlyContent(value: string): string {
     .replace(/\bconfidence(?: score)?\s*:?\s*\d{1,3}%?/gi, "")
     .replace(/[^.!?\n]*\bconfidence(?: score)?\b[^.!?\n]*(?:[.!?]|$)/gi, "")
     .replace(/\b\d{1,3}\s*%\b/g, "")
-    .replace(/\b(?:Mobbing|Sexual harassment|Violence|Racism):\s*(?:Likely indicated|Possible|Not indicated|Insufficient information)\b/gi, "")
+    .replace(
+      /\b(?:Mobbing|Sexual harassment|Violence|Racism):\s*(?:Likely indicated|Possible|Not indicated|Insufficient information)\b/gi,
+      "",
+    )
     .replace(/[ \t]{2,}/g, " ")
     .replace(/[ \t]+\n/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
@@ -581,7 +713,8 @@ function findDashboardOnlyContentIssues(value: string) {
       subject: "Dashboard wording",
     },
     {
-      pattern: /\b(?:Mobbing|Sexual harassment|Violence|Racism):\s*(?:Likely indicated|Possible|Not indicated|Insufficient information)\b/i,
+      pattern:
+        /\b(?:Mobbing|Sexual harassment|Violence|Racism):\s*(?:Likely indicated|Possible|Not indicated|Insufficient information)\b/i,
       subject: "Dashboard conduct label",
     },
   ];

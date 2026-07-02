@@ -33,7 +33,8 @@ const analysisSteps = [
   },
   {
     title: "Build case evidence",
-    description: "Group interviews, allegations, quotes, events, people, and witnesses.",
+    description:
+      "Group interviews, allegations, quotes, events, people, and witnesses.",
   },
   {
     title: "Analyze across accounts",
@@ -63,14 +64,13 @@ export function AnalysisPanel({
   initialDocuments: CaseDocument[];
   initialAnalysis: CaseAnalysisResponse;
 }) {
-  const extractedCount = useMemo(
+  const approvedExtractionCount = useMemo(
     () =>
       initialDocuments.filter(
-        (document) => document.status === "extracted" || document.extractedData
+        (document) => document.extractionReviewStatus === "approved",
       ).length,
-    [initialDocuments]
+    [initialDocuments],
   );
-
   const { data } = useCaseAnalysis(caseId, initialAnalysis);
   const analyze = useAnalyzeCase(caseId);
   const cancelAnalysis = useCancelAnalysis(caseId);
@@ -81,7 +81,7 @@ export function AnalysisPanel({
   const isRunning =
     status === "analyzing" || (analyze.isPending && !isCanceled);
   const isCanceling = cancelAnalysis.isPending;
-  const canRun = extractedCount > 0 && !isRunning && !isCanceling;
+  const canRun = approvedExtractionCount > 0 && !isRunning && !isCanceling;
   const visibleAnalysis = isRunning ? null : analysis;
 
   async function run() {
@@ -90,7 +90,7 @@ export function AnalysisPanel({
       toast.success(
         analysis
           ? "Investigation analysis updated."
-          : "Investigation analysis complete."
+          : "Investigation analysis complete.",
       );
     } catch (error) {
       if (
@@ -100,9 +100,7 @@ export function AnalysisPanel({
         return;
       }
 
-      toast.error(
-        error instanceof Error ? error.message : "Analysis failed."
-      );
+      toast.error(error instanceof Error ? error.message : "Analysis failed.");
     }
   }
 
@@ -112,7 +110,7 @@ export function AnalysisPanel({
       toast.success("Analysis canceled.");
     } catch (error) {
       toast.error(
-        error instanceof Error ? error.message : "Could not cancel analysis."
+        error instanceof Error ? error.message : "Could not cancel analysis.",
       );
     }
   }
@@ -123,10 +121,10 @@ export function AnalysisPanel({
         <div>
           <h2 className="text-sm font-medium">Cross-interview analysis</h2>
           <p className="text-muted-foreground text-sm">
-            {extractedCount === 0
-              ? "Extract at least one interview before running the analysis."
-              : `Triangulates ${extractedCount} extracted interview${
-                  extractedCount === 1 ? "" : "s"
+            {approvedExtractionCount === 0
+              ? "Approve at least one extraction before running the analysis."
+              : `Triangulates ${approvedExtractionCount} approved interview${
+                  approvedExtractionCount === 1 ? "" : "s"
                 } into per-grievance findings — claimant, accused, and reference accounts with a reasoned verdict.`}
           </p>
         </div>
@@ -147,7 +145,7 @@ export function AnalysisPanel({
           ) : null}
           <Button
             variant={isCanceled ? "outline" : "default"}
-            onClick={run}
+            onClick={() => void run()}
             disabled={!canRun}
           >
             {isRunning ? (
@@ -158,7 +156,7 @@ export function AnalysisPanel({
             ) : isCanceled || analysis ? (
               <>
                 <RotateCcw />
-                Re-analyse
+                Re-analyse all grievances
               </>
             ) : (
               <>
@@ -168,7 +166,7 @@ export function AnalysisPanel({
             )}
           </Button>
           {isCanceled && !isRunning ? (
-            <Button onClick={run} disabled={!canRun}>
+            <Button onClick={() => void run()} disabled={!canRun}>
               <Play />
               Resume analysis
             </Button>
@@ -186,12 +184,13 @@ export function AnalysisPanel({
       {status === "canceled" && !isRunning ? (
         <p className="flex items-center gap-2 rounded-lg border border-muted bg-muted/40 p-3 text-sm text-muted-foreground">
           <StopCircle className="size-4 shrink-0" />
-          Analysis was canceled. Resume it to run again from the extracted case data.
+          Analysis was canceled. Resume it to run again from the extracted case
+          data.
         </p>
       ) : null}
 
       <AnalysisSteps
-        extractedCount={extractedCount}
+        extractedCount={approvedExtractionCount}
         hasAnalysis={Boolean(visibleAnalysis)}
         isRunning={isRunning}
       />
@@ -217,7 +216,8 @@ function AnalysisLoadingPanel() {
         <div className="space-y-1">
           <h3 className="text-sm font-medium">Analyzing interviews</h3>
           <p className="text-muted-foreground text-sm leading-relaxed">
-            Building the investigation dashboard from the extracted case material.
+            Building the investigation dashboard from the extracted case
+            material.
           </p>
         </div>
       </div>
@@ -248,7 +248,11 @@ function AnalysisSteps({
           const isComplete = hasAnalysis || (isRunning && index < activeIndex);
           const isActive = isRunning && index === activeIndex;
           const isUnavailable = extractedCount === 0;
-          const StepIcon = isComplete ? CheckCircle2 : isActive ? Loader2 : Circle;
+          const StepIcon = isComplete
+            ? CheckCircle2
+            : isActive
+              ? Loader2
+              : Circle;
 
           return (
             <li
@@ -256,8 +260,9 @@ function AnalysisSteps({
               className={cn(
                 "flex min-h-28 flex-col gap-2 rounded-md border p-3 text-sm",
                 isActive && "border-primary bg-primary/5",
-                isComplete && "border-emerald-600/40 bg-emerald-50 text-emerald-950",
-                isUnavailable && "opacity-60"
+                isComplete &&
+                  "border-emerald-600/40 bg-emerald-50 text-emerald-950",
+                isUnavailable && "opacity-60",
               )}
             >
               <div className="flex items-center gap-2">
@@ -265,7 +270,7 @@ function AnalysisSteps({
                   className={cn(
                     "size-4 shrink-0",
                     isActive && "animate-spin text-primary",
-                    isComplete && "text-emerald-600"
+                    isComplete && "text-emerald-600",
                   )}
                 />
                 <span className="font-medium leading-snug">{step.title}</span>

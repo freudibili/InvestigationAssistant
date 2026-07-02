@@ -2,7 +2,10 @@
 
 import { revalidatePath } from "next/cache";
 import { classifyExtractedItems } from "@/features/extraction/lib/classify-extracted-items";
-import { convertTextToPaginatedPdf } from "@/features/extraction/lib/pdf-convert";
+import {
+  convertMarkedTextToPdf,
+  convertTextToPaginatedPdf,
+} from "@/features/extraction/lib/pdf-convert";
 import {
   chunkPageSpan,
   createExtractionChunks,
@@ -15,7 +18,13 @@ import {
   extractInterviewChunkWithFallback,
   parseStoredDrafts,
 } from "@/features/extraction/lib/pipeline";
-import { groundExtractionQuotes } from "@/features/extraction/lib/quote-grounding";
+import {
+  groundExtractionQuotes,
+} from "@/features/extraction/lib/quote-grounding";
+import {
+  isExtractionReviewComplete,
+  resetExtractionReview,
+} from "@/features/extraction/lib/review";
 import { suggestCaseType } from "@/lib/db/cases";
 import {
   cancelDocumentExtraction,
@@ -25,15 +34,24 @@ import {
   replaceDocumentWithPdf,
   saveExtractionDrafts,
   saveExtractionResult,
+  saveInvestigatorExtraction,
+  reviewExtraction,
   setExtractionProgress,
   setDocumentStatus,
   startDocumentExtraction,
 } from "@/lib/db/documents";
 import type {
   CaseDocument,
+  ContentVersion,
   ExtractionDraftGroup,
   ExtractionResponse,
+  IntervieweeRole,
 } from "@/lib/types";
+import { CONTENT_VERSIONS, INTERVIEWEE_ROLES } from "@/lib/types";
+import {
+  correctedSourceTextSchema,
+  extractedDataSchema,
+} from "@/lib/validation";
 
 class ExtractionCanceledError extends Error {
   constructor(message = "Extraction canceled.") {
@@ -43,7 +61,7 @@ class ExtractionCanceledError extends Error {
 }
 
 export async function cancelExtractionAction(
-  documentId: string
+  documentId: string,
 ): Promise<CaseDocument> {
   const document = await cancelDocumentExtraction(documentId);
   revalidatePath(`/cases/${document.caseId}/extraction`);
@@ -71,12 +89,334 @@ export type ExtractDocumentResult =
   | { ok: true; document: CaseDocument }
   | { ok: false; canceled: boolean; message: string };
 
+export type ExtractionReviewResult =
+  { ok: true; document: CaseDocument } | { ok: false; message: string };
+
+export type CorrectedSourceResult =
+  | { ok: true; sourceText: string }
+  | { ok: false; message: string };
+
+export async function getCorrectedSourceAction(
+  documentId: string,
+): Promise<CorrectedSourceResult> {
+  try {
+    const document = await getDocument(documentId);
+    if (!document) return { ok: false, message: "Document not found." };
+
+    const sourceText = document.correctedRawText ?? document.rawText;
+    return sourceText
+      ? { ok: true, sourceText }
+      : { ok: false, message: "The corrected source text is unavailable." };
+  } catch (error) {
+    return { ok: false, message: toExtractionReviewMessage(error) };
+  }
+}
+
+export async function saveExtractionCorrectionAction(
+  documentId: string,
+  extractedData: unknown,
+  reason?: string,
+  intervieweeRole?: IntervieweeRole,
+  sourceVersion?: ContentVersion,
+  expectedRevision?: number,
+): Promise<ExtractionReviewResult> {
+  const parsed = extractedDataSchema.safeParse(extractedData);
+  if (
+    !parsed.success ||
+    !INTERVIEWEE_ROLES.includes(intervieweeRole as IntervieweeRole) ||
+    !CONTENT_VERSIONS.includes(sourceVersion as ContentVersion) ||
+    !Number.isSafeInteger(expectedRevision) ||
+    (expectedRevision ?? -1) < 0
+  ) {
+    return { ok: false, message: "The corrected extraction is not valid." };
+  }
+
+  try {
+    const currentDocument = await getDocument(documentId);
+    if (!currentDocument) {
+      return { ok: false, message: "Document not found." };
+    }
+    if (currentDocument.status === "extracting") {
+      return {
+        ok: false,
+        message: "Wait for extraction to finish before making corrections.",
+      };
+    }
+    if (currentDocument.extractionRevision !== expectedRevision) {
+      return {
+        ok: false,
+        message:
+          "Extraction changed since it was opened. Reload and try again.",
+      };
+    }
+    const sourceData = extractionVersionData(
+      currentDocument,
+      sourceVersion as ContentVersion,
+    );
+    const correctedRawText =
+      currentDocument.correctedRawText ?? currentDocument.rawText;
+    if (!correctedRawText) {
+      return { ok: false, message: "The source document text is unavailable." };
+    }
+    const groundedData = requiresQuoteGrounding(sourceData, parsed.data)
+      ? await groundExtractionQuotes({
+          documentId,
+          rawText: correctedRawText,
+          extractedData: parsed.data,
+          preserveUnverifiedQuotes: true,
+          sourceRevision: currentDocument.correctedSourceRevision,
+        })
+      : parsed.data;
+    const document = await saveInvestigatorExtraction({
+      documentId,
+      extractedData: groundedData,
+      intervieweeRole: intervieweeRole as IntervieweeRole,
+      sourceVersion: sourceVersion as ContentVersion,
+      reason,
+      expectedRevision: expectedRevision as number,
+      correctedSource: {
+        rawText: correctedRawText,
+        fileUrl: currentDocument.correctedFileUrl,
+      },
+    });
+    revalidateExtractionPaths(document);
+    return { ok: true, document };
+  } catch (error) {
+    return { ok: false, message: toExtractionReviewMessage(error) };
+  }
+}
+
+export async function saveCorrectedSourceAction(
+  documentId: string,
+  sourceText: unknown,
+  sourceVersion: ContentVersion,
+  expectedRevision: number,
+): Promise<ExtractionReviewResult> {
+  const parsed = correctedSourceTextSchema.safeParse(sourceText);
+  if (
+    !parsed.success ||
+    !CONTENT_VERSIONS.includes(sourceVersion) ||
+    !Number.isSafeInteger(expectedRevision) ||
+    expectedRevision < 0
+  ) {
+    return { ok: false, message: "The corrected source text is not valid." };
+  }
+
+  try {
+    const currentDocument = await getDocument(documentId);
+    if (!currentDocument) return { ok: false, message: "Document not found." };
+    if (!currentDocument.intervieweeRole) {
+      return { ok: false, message: "Select the interviewee role first." };
+    }
+    if (currentDocument.extractionRevision !== expectedRevision) {
+      return {
+        ok: false,
+        message: "Extraction changed since it was opened. Reload and try again.",
+      };
+    }
+
+    const extraction = extractionVersionData(currentDocument, sourceVersion);
+    if (!extraction) {
+      return { ok: false, message: "The selected extraction is unavailable." };
+    }
+
+    const nextSourceRevision = currentDocument.correctedSourceRevision + 1;
+    const groundedData = resetExtractionReview(
+      await groundExtractionQuotes({
+        documentId,
+        rawText: parsed.data,
+        extractedData: extraction,
+        preserveUnverifiedQuotes: true,
+        sourceRevision: nextSourceRevision,
+      }),
+    );
+    const document = await saveInvestigatorExtraction({
+      documentId,
+      extractedData: groundedData,
+      intervieweeRole: currentDocument.intervieweeRole,
+      sourceVersion,
+      expectedRevision,
+      correctedSource: {
+        rawText: parsed.data,
+        pdfBytes: await convertMarkedTextToPdf(parsed.data),
+      },
+    });
+    revalidateExtractionPaths(document);
+    return { ok: true, document };
+  } catch (error) {
+    return { ok: false, message: toExtractionReviewMessage(error) };
+  }
+}
+
+function extractionVersionData(
+  document: CaseDocument,
+  version: ContentVersion,
+): CaseDocument["extractedData"] {
+  if (version === "approved") return document.approvedExtractedData;
+  if (version === "edited") return document.investigatorExtractedData;
+  return document.aiExtractedData ?? document.extractedData;
+}
+
+function requiresQuoteGrounding(
+  before: CaseDocument["extractedData"],
+  after: NonNullable<CaseDocument["extractedData"]>,
+): boolean {
+  if (!before) return true;
+  const originalQuotes = new Map(
+    collectExtractionQuotes(before)
+      .filter((quote) => quote.provenance)
+      .map((quote) => [quote.provenance!.id, quote]),
+  );
+  const originalUnverifiedQuotes = new Set(
+    collectExtractionQuotes(before)
+      .filter((quote) => !quote.provenance)
+      .map(unverifiedQuoteKey),
+  );
+  return collectExtractionQuotes(after).some((quote) => {
+    if (!quote.provenance) {
+      return !originalUnverifiedQuotes.has(unverifiedQuoteKey(quote));
+    }
+    const original = originalQuotes.get(quote.provenance.id);
+    return (
+      !original ||
+      original.text !== quote.text ||
+      original.sourcePages.join(",") !== quote.sourcePages.join(",") ||
+      quote.sourceReviewStatus !== "verified"
+    );
+  });
+}
+
+function unverifiedQuoteKey(
+  quote: ReturnType<typeof collectExtractionQuotes>[number],
+): string {
+  return `${quote.speaker ?? ""}|${quote.text}|${quote.sourcePages.join(",")}`;
+}
+
+function collectExtractionQuotes(
+  data: NonNullable<CaseDocument["extractedData"]>,
+) {
+  return [
+    ...data.notableQuotes,
+    ...data.allegations.flatMap((item) => item.relevantQuotes),
+    ...data.allegations.flatMap((item) =>
+      item.witnesses.flatMap((witness) => witness.supportingQuotes),
+    ),
+    ...data.factualStatements.flatMap((item) => item.supportingQuotes),
+    ...data.keyEvents.flatMap((item) => item.supportingQuotes),
+    ...data.potentialWitnesses.flatMap((item) => item.supportingQuotes),
+  ];
+}
+
+export async function reviewExtractionAction(
+  documentId: string,
+  decision: "approve" | "exclude",
+  reason?: string,
+  sourceVersion?: ContentVersion,
+  expectedRevision?: number,
+): Promise<ExtractionReviewResult> {
+  if (
+    !["approve", "exclude"].includes(decision) ||
+    !CONTENT_VERSIONS.includes(sourceVersion as ContentVersion) ||
+    !Number.isSafeInteger(expectedRevision) ||
+    (expectedRevision ?? -1) < 0
+  ) {
+    return {
+      ok: false,
+      message: "The extraction review decision is not valid.",
+    };
+  }
+  try {
+    const currentDocument = await getDocument(documentId);
+    if (!currentDocument) {
+      return { ok: false, message: "Document not found." };
+    }
+    const selectedExtraction = extractionVersionData(
+      currentDocument,
+      sourceVersion as ContentVersion,
+    );
+    if (decision === "approve") {
+      const approvalIssue = extractionApprovalIssue(
+        currentDocument,
+        selectedExtraction,
+        sourceVersion as ContentVersion,
+      );
+      if (approvalIssue) return { ok: false, message: approvalIssue };
+    }
+
+    const document = await reviewExtraction({
+      documentId,
+      decision,
+      sourceVersion: sourceVersion as ContentVersion,
+      reason,
+      expectedRevision: expectedRevision as number,
+    });
+    revalidateExtractionPaths(document);
+    return { ok: true, document };
+  } catch (error) {
+    return { ok: false, message: toExtractionReviewMessage(error) };
+  }
+}
+
+function extractionApprovalIssue(
+  document: CaseDocument,
+  extraction: CaseDocument["extractedData"],
+  version: ContentVersion,
+): string | null {
+  if (!extraction) return "The selected extraction is unavailable.";
+  if (version === "ai" && document.correctedSourceRevision > 0) {
+    return "Approve the corrected extraction after reviewing the edited source.";
+  }
+  if (!isExtractionReviewComplete(extraction)) {
+    return "Review and approve every extraction section before approving the document.";
+  }
+
+  const hasUnresolvedWarning = extraction.extractionWarnings.some(
+    (warning) =>
+      !extraction.extractionWarningReviews.some(
+        (review) =>
+          review.warning === warning && review.status !== "needs_correction",
+      ),
+  );
+  if (hasUnresolvedWarning) {
+    return "Resolve or accept every extraction warning before approving the document.";
+  }
+
+  const hasUnlinkedQuote = collectExtractionQuotes(extraction).some(
+    (quote) =>
+      quote.sourceReviewStatus !== "verified" || !quote.provenance?.verified,
+  );
+  if (hasUnlinkedQuote) {
+    return "Review or remove every unlinked quote before approving extraction.";
+  }
+
+  const hasUnsupportedAllegation = extraction.allegations.some(
+    (allegation) =>
+      allegation.relevance === "relevant" &&
+      !allegation.relevantQuotes.some((quote) => quote.provenance?.verified),
+  );
+  return hasUnsupportedAllegation
+    ? "Link each relevant allegation to a verified quote before approving extraction."
+    : null;
+}
+
+function revalidateExtractionPaths(document: CaseDocument): void {
+  revalidatePath(`/cases/${document.caseId}/extraction`);
+  revalidatePath(`/cases/${document.caseId}/extraction/${document.id}`);
+  revalidatePath(`/cases/${document.caseId}/analysis`);
+}
+
+function toExtractionReviewMessage(error: unknown): string {
+  return error instanceof Error
+    ? error.message
+    : "Could not update the extraction review.";
+}
+
 /**
  * Run AI extraction for a document. Triggered manually by the investigator.
  * On any failure the document is marked `failed` and a safe message is returned.
  */
 export async function extractDocumentAction(
-  documentId: string
+  documentId: string,
 ): Promise<ExtractDocumentResult> {
   const document = await getDocument(documentId);
   if (!document) {
@@ -130,7 +470,6 @@ export async function extractDocumentAction(
         id: documentId,
         runId,
         caseId: document.caseId,
-        oldObjectPath: document.fileUrl,
         pdfBytes,
         rawText: markedText,
       });
@@ -147,7 +486,8 @@ export async function extractDocumentAction(
       const chunk = chunks[index];
       return chunk.pageEnd ?? chunk.pageStart ?? index + 1;
     };
-    const totalPages = chunks.length === 0 ? 0 : lastPageOfChunk(chunks.length - 1);
+    const totalPages =
+      chunks.length === 0 ? 0 : lastPageOfChunk(chunks.length - 1);
     const totalSteps = totalPages + 1;
 
     // Reuse page drafts persisted by a previous failed/canceled run so we resume
@@ -157,7 +497,7 @@ export async function extractDocumentAction(
     // re-extracted. Drafts from a fully extracted document are cleared on
     // success, so a re-extraction of an already-extracted document starts fresh.
     const savedByLabel = loadResumableDrafts(
-      await getDocumentExtractionDrafts(documentId)
+      await getDocumentExtractionDrafts(documentId),
     );
 
     // Completed chunk groups, kept in document order. Re-persisted after each
@@ -183,7 +523,11 @@ export async function extractDocumentAction(
     // time without enlarging any single prompt/response (the truncation risk).
     // Cancellation is checked between batches; a batch's drafts are appended in
     // order so consolidation still sees pages in document order.
-    for (let start = 0; start < chunks.length; start += EXTRACTION_CONCURRENCY) {
+    for (
+      let start = 0;
+      start < chunks.length;
+      start += EXTRACTION_CONCURRENCY
+    ) {
       const batch = chunks.slice(start, start + EXTRACTION_CONCURRENCY);
       const batchLabel = describeSourceUnitBatch(start, batch);
       const pagesBefore = start === 0 ? 0 : lastPageOfChunk(start - 1);
@@ -207,10 +551,10 @@ export async function extractDocumentAction(
             (await extractInterviewChunkWithFallback(
               chunk,
               document.fileName,
-              document.intervieweeRole
+              document.intervieweeRole,
             ));
           return { chunkLabel: chunk.label, drafts: chunkDrafts };
-        })
+        }),
       );
       draftGroups.push(...batchGroups);
 
@@ -231,7 +575,7 @@ export async function extractDocumentAction(
     }
 
     const drafts: ExtractionResponse[] = draftGroups.flatMap(
-      (group) => group.drafts
+      (group) => group.drafts,
     );
 
     await setExtractionProgress({
@@ -258,7 +602,7 @@ export async function extractDocumentAction(
           });
           await assertExtractionIsActive(documentId, runId);
         },
-      }
+      },
     );
     await assertExtractionIsActive(documentId, runId);
 
@@ -275,6 +619,7 @@ export async function extractDocumentAction(
       documentId,
       rawText,
       extractedData: extracted,
+      sourceRevision: document.correctedSourceRevision,
     });
     await assertExtractionIsActive(documentId, runId);
 
@@ -358,21 +703,25 @@ export async function extractDocumentAction(
  */
 function describeSourceUnitBatch(
   start: number,
-  batch: { pageStart: number | null; pageEnd?: number }[]
+  batch: { pageStart: number | null; pageEnd?: number }[],
 ): string {
   const paginated = batch.filter((chunk) => chunk.pageStart != null);
 
   if (paginated.length === batch.length && paginated.length > 0) {
-    const first = Math.min(...paginated.map((chunk) => chunk.pageStart as number));
+    const first = Math.min(
+      ...paginated.map((chunk) => chunk.pageStart as number),
+    );
     const last = Math.max(
-      ...paginated.map((chunk) => chunk.pageEnd ?? (chunk.pageStart as number))
+      ...paginated.map((chunk) => chunk.pageEnd ?? (chunk.pageStart as number)),
     );
     return first === last ? `page ${first}` : `pages ${first}–${last}`;
   }
 
   const firstNum = start + 1;
   const lastNum = start + batch.length;
-  return firstNum === lastNum ? `page ${firstNum}` : `pages ${firstNum}–${lastNum}`;
+  return firstNum === lastNum
+    ? `page ${firstNum}`
+    : `pages ${firstNum}–${lastNum}`;
 }
 
 /**
@@ -381,7 +730,7 @@ function describeSourceUnitBatch(
  * is dropped so its chunk gets re-extracted rather than poisoning consolidation.
  */
 function loadResumableDrafts(
-  groups: ExtractionDraftGroup[]
+  groups: ExtractionDraftGroup[],
 ): Map<string, ExtractionResponse[]> {
   const byLabel = new Map<string, ExtractionResponse[]>();
 
@@ -401,12 +750,12 @@ function loadResumableDrafts(
  */
 function sumReusableChunkPages(
   chunks: ExtractionChunk[],
-  savedByLabel: Map<string, ExtractionResponse[]>
+  savedByLabel: Map<string, ExtractionResponse[]>,
 ): number {
   return chunks.reduce(
     (total, chunk) =>
       savedByLabel.has(chunk.label) ? total + chunkPageSpan(chunk) : total,
-    0
+    0,
   );
 }
 
@@ -431,14 +780,17 @@ function logExtractionFailure(params: {
   if (error instanceof ExtractionError) {
     console.error(
       `${prefix} type=ExtractionError recoverable=${error.recoverable} message="${error.message}"` +
-        (error.detail ? ` detail=${JSON.stringify(error.detail)}` : "")
+        (error.detail ? ` detail=${JSON.stringify(error.detail)}` : ""),
     );
     if (error.cause) console.error(`${prefix} cause:`, error.cause);
     return;
   }
 
   if (error instanceof Error) {
-    console.error(`${prefix} type=${error.name} message="${error.message}"`, error);
+    console.error(
+      `${prefix} type=${error.name} message="${error.message}"`,
+      error,
+    );
     return;
   }
 
@@ -447,7 +799,7 @@ function logExtractionFailure(params: {
 
 async function assertExtractionIsActive(
   documentId: string,
-  runId: string
+  runId: string,
 ): Promise<void> {
   const state = await getDocumentExtractionRunState(documentId);
 

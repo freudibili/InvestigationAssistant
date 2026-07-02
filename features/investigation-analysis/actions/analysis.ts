@@ -27,6 +27,7 @@ import type {
   ConductAssessment,
   InvestigationAnalysis,
 } from "@/features/investigation-analysis/validation";
+import type { CaseDocument } from "@/lib/types";
 
 /**
  * Result of an analysis run. Like extraction, we *return* failures instead of
@@ -54,7 +55,7 @@ export async function cancelAnalysisAction(caseId: string) {
  * message is returned.
  */
 export async function analyzeCaseAction(
-  caseId: string
+  caseId: string,
 ): Promise<AnalyzeCaseResult> {
   const state = await getCaseAnalysisState(caseId);
   if (state.status === "analyzing") {
@@ -70,7 +71,12 @@ export async function analyzeCaseAction(
   revalidatePath(`/cases/${caseId}/analysis`);
 
   try {
-    const documents = await listDocumentsForCase(caseId);
+    const documents = getApprovedDocuments(await listDocumentsForCase(caseId));
+    if (documents.length === 0) {
+      throw new AnalysisError(
+        "Approve at least one extraction before running analysis.",
+      );
+    }
     await assertAnalysisIsActive(caseId, runId);
     const analysis = await generateCaseAnalysis(documents);
     await assertAnalysisIsActive(caseId, runId);
@@ -92,19 +98,23 @@ export async function analyzeCaseAction(
 
 export async function assessConductAction(
   caseId: string,
-  reprocheId: string
+  reprocheId: string,
 ): Promise<AssessConductResult> {
   try {
     const { analysis: currentAnalysis } = await getCaseAnalysis(caseId);
     const reproche = currentAnalysis?.reproches.find(
-      (item) => item.id === reprocheId
+      (item) => item.id === reprocheId,
     );
     if (!reproche) {
       return { ok: false, message: "Grievance not found in saved analysis." };
     }
 
     const assessment = await assessReprocheConduct(reproche);
-    const analysis = await saveConductAssessment(caseId, reprocheId, assessment);
+    const analysis = await saveConductAssessment(
+      caseId,
+      reprocheId,
+      assessment,
+    );
     revalidatePath(`/cases/${caseId}/analysis`);
     return { ok: true, assessment, analysis };
   } catch (error) {
@@ -114,7 +124,7 @@ export async function assessConductAction(
 }
 
 export async function assessOverallConductAction(
-  caseId: string
+  caseId: string,
 ): Promise<AssessConductResult> {
   try {
     const { analysis } = await getCaseAnalysis(caseId);
@@ -130,7 +140,10 @@ export async function assessOverallConductAction(
     }
 
     const assessment = await assessGlobalConduct(analysis);
-    const savedAnalysis = await saveOverallConductAssessment(caseId, assessment);
+    const savedAnalysis = await saveOverallConductAssessment(
+      caseId,
+      assessment,
+    );
     revalidatePath(`/cases/${caseId}/analysis`);
     return { ok: true, assessment, analysis: savedAnalysis };
   } catch (error) {
@@ -140,7 +153,7 @@ export async function assessOverallConductAction(
 }
 
 export async function assessAllConductAction(
-  caseId: string
+  caseId: string,
 ): Promise<AssessConductResult> {
   try {
     const { analysis } = await getCaseAnalysis(caseId);
@@ -159,14 +172,14 @@ export async function assessAllConductAction(
       currentAnalysis = await saveConductAssessment(
         caseId,
         reproche.id,
-        assessment
+        assessment,
       );
     }
 
     const overallAssessment = await assessGlobalConduct(currentAnalysis);
     const savedAnalysis = await saveOverallConductAssessment(
       caseId,
-      overallAssessment
+      overallAssessment,
     );
     revalidatePath(`/cases/${caseId}/analysis`);
     return { ok: true, assessment: overallAssessment, analysis: savedAnalysis };
@@ -174,6 +187,21 @@ export async function assessAllConductAction(
     logConductAssessmentFailure({ reprocheId: "all", error });
     return { ok: false, message: toConductAssessmentUserMessage(error) };
   }
+}
+
+function getApprovedDocuments(documents: CaseDocument[]): CaseDocument[] {
+  return documents
+    .filter(
+      (document) =>
+        document.extractionReviewStatus === "approved" &&
+        document.approvedExtractedData,
+    )
+    .map((document) => ({
+      ...document,
+      extractedData: document.approvedExtractedData,
+      fileUrl: document.approvedFileUrl ?? document.fileUrl,
+      rawText: document.approvedRawText ?? document.rawText,
+    }));
 }
 
 function isCanceledAnalysis(error: unknown): error is Error {
@@ -196,13 +224,16 @@ function logAnalysisFailure(params: {
   if (error instanceof AnalysisError) {
     console.error(
       `${prefix} type=AnalysisError message="${error.message}"` +
-        (error.detail ? ` detail=${error.detail}` : "")
+        (error.detail ? ` detail=${error.detail}` : ""),
     );
     if (error.cause) console.error(`${prefix} cause:`, error.cause);
     return;
   }
   if (error instanceof Error) {
-    console.error(`${prefix} type=${error.name} message="${error.message}"`, error);
+    console.error(
+      `${prefix} type=${error.name} message="${error.message}"`,
+      error,
+    );
     return;
   }
   console.error(`${prefix} non-error thrown:`, error);
@@ -223,13 +254,16 @@ function logConductAssessmentFailure(params: {
   if (error instanceof ConductAssessmentError) {
     console.error(
       `${prefix} type=ConductAssessmentError message="${error.message}"` +
-        (error.detail ? ` detail=${error.detail}` : "")
+        (error.detail ? ` detail=${error.detail}` : ""),
     );
     if (error.cause) console.error(`${prefix} cause:`, error.cause);
     return;
   }
   if (error instanceof Error) {
-    console.error(`${prefix} type=${error.name} message="${error.message}"`, error);
+    console.error(
+      `${prefix} type=${error.name} message="${error.message}"`,
+      error,
+    );
     return;
   }
   console.error(`${prefix} non-error thrown:`, error);

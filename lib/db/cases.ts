@@ -52,10 +52,21 @@ export async function deleteCase(caseId: string): Promise<void> {
   const supabase = getSupabaseAdmin();
   const { data: documents, error: documentsError } = await supabase
     .from("documents")
-    .select("file_url")
+    .select(
+      "id, file_url, original_file_url, corrected_file_url, ai_file_url, approved_file_url",
+    )
     .eq("case_id", caseId);
 
   if (documentsError) throw new Error(documentsError.message);
+
+  const { data: auditEntries, error: auditError } = await supabase
+    .from("investigator_change_audit")
+    .select(
+      "original_source_file_url, edited_source_file_url, approved_source_file_url",
+    )
+    .eq("case_id", caseId);
+
+  if (auditError) throw new Error(auditError.message);
 
   const { data, error } = await supabase
     .from("cases")
@@ -67,7 +78,24 @@ export async function deleteCase(caseId: string): Promise<void> {
   if (error) throw new Error(error.message);
   if (!data) throw new Error("Case not found.");
 
-  const objectPaths = documents.map((document) => document.file_url);
+  const objectPaths = Array.from(
+    new Set(
+      [
+        ...documents.flatMap((document) => [
+          document.file_url,
+          document.original_file_url,
+          document.corrected_file_url,
+          document.ai_file_url,
+          document.approved_file_url,
+        ]),
+        ...auditEntries.flatMap((entry) => [
+          entry.original_source_file_url,
+          entry.edited_source_file_url,
+          entry.approved_source_file_url,
+        ]),
+      ].filter((path): path is string => Boolean(path)),
+    ),
+  );
   if (objectPaths.length > 0) {
     await supabase.storage.from(env.storageBucket).remove(objectPaths);
   }
@@ -80,7 +108,7 @@ export async function deleteCase(caseId: string): Promise<void> {
  */
 export async function suggestCaseType(
   caseId: string,
-  caseType: CaseType
+  caseType: CaseType,
 ): Promise<Case | null> {
   const supabase = getSupabaseAdmin();
   const { data, error } = await supabase
@@ -101,7 +129,7 @@ export async function suggestCaseType(
  */
 export async function setCaseType(
   caseId: string,
-  caseType: CaseType | null
+  caseType: CaseType | null,
 ): Promise<Case> {
   const supabase = getSupabaseAdmin();
   const { data, error } = await supabase

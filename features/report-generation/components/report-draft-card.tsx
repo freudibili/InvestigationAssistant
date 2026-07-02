@@ -56,11 +56,11 @@ const reportGenerationSteps = [
   },
   {
     title: "Format allegations",
-    description: "Place approved dashboard allegations into section 5 without rewriting them.",
+    description: "Place dashboard allegations into section 5 without rewriting them.",
   },
   {
     title: "Format global assessment",
-    description: "Place the approved global assessment into section 6.",
+    description: "Place the global assessment into section 6.",
   },
   {
     title: "Remove dashboard-only content",
@@ -372,7 +372,7 @@ export function ReportDraftCard({
                 }
                 title={
                   liveAnalysis.reproches.length === 0
-                    ? "No approved reproaches are available for report generation."
+                    ? "No reproaches are available for report generation."
                     : undefined
                 }
               >
@@ -394,7 +394,7 @@ export function ReportDraftCard({
 
           {liveAnalysis.reproches.length === 0 ? (
             <p className="text-muted-foreground rounded-md border border-dashed p-3 text-sm">
-              No approved reproaches are available for report generation.
+              No reproaches are available for report generation.
             </p>
           ) : null}
 
@@ -474,7 +474,7 @@ function RegenerateReportDialog({
         <DialogHeader>
           <DialogTitle>Regenerate AI sections?</DialogTitle>
           <DialogDescription>
-            Sections marked AI will be refreshed from the approved analysis and
+            Sections marked AI will be refreshed from the case analysis and
             global assessment. Saved manual and custom sections are kept.
             Unsaved edits will be discarded.
           </DialogDescription>

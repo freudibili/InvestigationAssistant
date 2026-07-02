@@ -18,19 +18,18 @@ export interface AnalysisState {
 export interface CaseAnalysis {
   status: AnalysisStatus;
   generatedAt: string | null;
-  /** Validated analysis, or null when none exists or the stored shape is stale. */
   analysis: InvestigationAnalysis | null;
 }
 
 /** Lightweight status read used to guard writes and to poll for completion. */
 export async function getCaseAnalysisState(
-  caseId: string
+  caseId: string,
 ): Promise<AnalysisState> {
   const supabase = getSupabaseAdmin();
   const { data, error } = await supabase
     .from("cases")
     .select(
-      "investigation_analysis_status, investigation_analysis_run_id, investigation_analysis_at"
+      "investigation_analysis_status, investigation_analysis_run_id, investigation_analysis_at",
     )
     .eq("id", caseId)
     .maybeSingle();
@@ -51,7 +50,7 @@ export async function getCaseAnalysis(caseId: string): Promise<CaseAnalysis> {
   const { data, error } = await supabase
     .from("cases")
     .select(
-      "investigation_analysis, investigation_analysis_status, investigation_analysis_at"
+      "investigation_analysis, investigation_analysis_status, investigation_analysis_at",
     )
     .eq("id", caseId)
     .maybeSingle();
@@ -61,21 +60,24 @@ export async function getCaseAnalysis(caseId: string): Promise<CaseAnalysis> {
 
   // A schema change since the analysis was written shouldn't crash the page —
   // treat an unparseable stored blob as "no analysis yet" so it can be re-run.
-  const parsed = data.investigation_analysis
-    ? investigationAnalysisSchema.safeParse(data.investigation_analysis)
-    : null;
+  const analysis = parseAnalysis(data.investigation_analysis);
 
   return {
     status: data.investigation_analysis_status ?? "idle",
     generatedAt: data.investigation_analysis_at,
-    analysis: parsed?.success ? parsed.data : null,
+    analysis,
   };
+}
+
+function parseAnalysis(value: unknown): InvestigationAnalysis | null {
+  const parsed = value ? investigationAnalysisSchema.safeParse(value) : null;
+  return parsed?.success ? parsed.data : null;
 }
 
 /** Mark the analysis as running and stamp the active run id. */
 export async function startAnalysis(
   caseId: string,
-  runId: string
+  runId: string,
 ): Promise<void> {
   const supabase = getSupabaseAdmin();
   const { error } = await supabase
@@ -97,7 +99,7 @@ export async function cancelAnalysis(caseId: string): Promise<AnalysisState> {
     .eq("id", caseId)
     .eq("investigation_analysis_status", "analyzing")
     .select(
-      "investigation_analysis_status, investigation_analysis_run_id, investigation_analysis_at"
+      "investigation_analysis_status, investigation_analysis_run_id, investigation_analysis_at",
     )
     .maybeSingle();
 
@@ -115,7 +117,7 @@ export async function cancelAnalysis(caseId: string): Promise<AnalysisState> {
 
 export async function assertAnalysisIsActive(
   caseId: string,
-  runId: string
+  runId: string,
 ): Promise<void> {
   const state = await getCaseAnalysisState(caseId);
   if (state.status === "canceled") {
@@ -133,7 +135,7 @@ export async function assertAnalysisIsActive(
 export async function saveAnalysis(
   caseId: string,
   runId: string,
-  analysis: InvestigationAnalysis
+  analysis: InvestigationAnalysis,
 ): Promise<void> {
   const supabase = getSupabaseAdmin();
   const { data, error } = await supabase
@@ -156,7 +158,7 @@ export async function saveAnalysis(
 export async function saveConductAssessment(
   caseId: string,
   reprocheId: string,
-  assessment: ConductAssessment
+  assessment: ConductAssessment,
 ): Promise<InvestigationAnalysis> {
   const current = await getCaseAnalysis(caseId);
 
@@ -198,7 +200,7 @@ export async function saveConductAssessment(
 
 export async function saveOverallConductAssessment(
   caseId: string,
-  assessment: ConductAssessment
+  assessment: ConductAssessment,
 ): Promise<InvestigationAnalysis> {
   const current = await getCaseAnalysis(caseId);
 
@@ -228,7 +230,7 @@ export async function saveOverallConductAssessment(
 /** Mark the active run as failed (guarded so it never overrides a newer run). */
 export async function setAnalysisFailed(
   caseId: string,
-  runId: string
+  runId: string,
 ): Promise<void> {
   const supabase = getSupabaseAdmin();
   const { error } = await supabase

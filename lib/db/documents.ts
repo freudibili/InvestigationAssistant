@@ -9,14 +9,16 @@ import {
 } from "@/lib/documents";
 import type {
   CaseDocument,
+  ContentVersion,
   DocumentStatus,
   ExtractedData,
   ExtractionDraftGroup,
   IntervieweeRole,
 } from "@/lib/types";
+import { extractedDataSchema } from "@/lib/validation";
 
 export async function listDocumentsForCase(
-  caseId: string
+  caseId: string,
 ): Promise<CaseDocument[]> {
   const supabase = getSupabaseAdmin();
   const { data, error } = await supabase
@@ -30,13 +32,13 @@ export async function listDocumentsForCase(
 }
 
 export async function listDocumentSummariesForCase(
-  caseId: string
+  caseId: string,
 ): Promise<CaseDocument[]> {
   const supabase = getSupabaseAdmin();
   const { data, error } = await supabase
     .from("documents")
     .select(
-      "id, case_id, file_name, file_url, status, interviewee_role, extraction_current_step, extraction_total_steps, extraction_step, created_at, extracted_at"
+      "id, case_id, file_name, file_url, original_file_url, corrected_file_url, ai_file_url, approved_file_url, status, interviewee_role, extraction_review_status, extraction_edited_at, extraction_approved_at, extraction_revision, corrected_source_revision, extraction_current_step, extraction_total_steps, extraction_step, created_at, extracted_at",
     )
     .eq("case_id", caseId)
     .order("created_at", { ascending: false });
@@ -48,10 +50,26 @@ export async function listDocumentSummariesForCase(
     caseId: row.case_id,
     fileName: row.file_name,
     fileUrl: row.file_url,
+    originalFileUrl: row.original_file_url,
+    correctedFileUrl: row.corrected_file_url,
+    aiFileUrl: row.ai_file_url,
+    approvedFileUrl: row.approved_file_url,
     status: row.status,
     intervieweeRole: row.interviewee_role,
     rawText: null,
+    originalRawText: null,
+    correctedRawText: null,
+    correctedSourceRevision: row.corrected_source_revision,
+    aiRawText: null,
+    approvedRawText: null,
     extractedData: null,
+    aiExtractedData: null,
+    investigatorExtractedData: null,
+    approvedExtractedData: null,
+    extractionReviewStatus: row.extraction_review_status,
+    extractionEditedAt: row.extraction_edited_at,
+    extractionApprovedAt: row.extraction_approved_at,
+    extractionRevision: row.extraction_revision,
     extractionCurrentStep: row.extraction_current_step,
     extractionTotalSteps: row.extraction_total_steps,
     extractionStep: row.extraction_step,
@@ -87,33 +105,39 @@ export async function createDocumentFromUpload(params: {
 }): Promise<CaseDocument> {
   const supabase = getSupabaseAdmin();
   const ext = getSupportedExtension(params.fileName) ?? ".pdf";
-  const objectPath = `${params.caseId}/${crypto.randomUUID()}${ext}`;
+  const originalObjectPath = `${params.caseId}/original/${crypto.randomUUID()}${ext}`;
 
-  const { error: uploadError } = await supabase.storage
+  const { error: originalUploadError } = await supabase.storage
     .from(env.storageBucket)
-    .upload(objectPath, params.fileBytes, {
+    .upload(originalObjectPath, params.fileBytes, {
       contentType: CONTENT_TYPE_BY_EXTENSION[ext],
       upsert: false,
     });
 
-  if (uploadError) throw new Error(uploadError.message);
+  if (originalUploadError) throw new Error(originalUploadError.message);
 
   const { data, error } = await supabase
     .from("documents")
     .insert({
       case_id: params.caseId,
       file_name: params.fileName,
-      file_url: objectPath,
+      file_url: originalObjectPath,
+      original_file_url: originalObjectPath,
+      corrected_file_url: originalObjectPath,
+      ai_file_url: ext === ".pdf" ? originalObjectPath : null,
       status: "uploaded",
       interviewee_role: params.intervieweeRole,
       raw_text: params.rawText,
+      original_raw_text: params.rawText,
+      corrected_raw_text: params.rawText,
+      ai_raw_text: ext === ".pdf" ? params.rawText : null,
     })
     .select("*")
     .single();
 
   if (error) {
     // Best-effort cleanup so we don't leave an orphaned object behind.
-    await supabase.storage.from(env.storageBucket).remove([objectPath]);
+    await supabase.storage.from(env.storageBucket).remove([originalObjectPath]);
     throw new Error(error.message);
   }
 
@@ -123,19 +147,17 @@ export async function createDocumentFromUpload(params: {
 /**
  * Replace a document's stored source with a converted PDF. Used when a non-PDF
  * upload is turned into a paginated PDF at extraction time: the new PDF is
- * uploaded, the row points at it with page-markered `raw_text`, and the old
- * object is removed (best-effort). Returns the new storage object path.
+ * uploaded and the row points at it with page-markered `raw_text`.
  */
 export async function replaceDocumentWithPdf(params: {
   id: string;
   runId: string;
   caseId: string;
-  oldObjectPath: string;
   pdfBytes: Uint8Array;
   rawText: string;
 }): Promise<string> {
   const supabase = getSupabaseAdmin();
-  const objectPath = `${params.caseId}/${crypto.randomUUID()}.pdf`;
+  const objectPath = `${params.caseId}/corrected/${crypto.randomUUID()}.pdf`;
 
   const { error: uploadError } = await supabase.storage
     .from(env.storageBucket)
@@ -150,7 +172,14 @@ export async function replaceDocumentWithPdf(params: {
   // canceled or superseded run must not overwrite the stored source.
   const { data, error } = await supabase
     .from("documents")
-    .update({ file_url: objectPath, raw_text: params.rawText })
+    .update({
+      file_url: objectPath,
+      corrected_file_url: objectPath,
+      ai_file_url: objectPath,
+      raw_text: params.rawText,
+      corrected_raw_text: params.rawText,
+      ai_raw_text: params.rawText,
+    })
     .eq("id", params.id)
     .eq("status", "extracting")
     .eq("extraction_run_id", params.runId)
@@ -163,13 +192,6 @@ export async function replaceDocumentWithPdf(params: {
     throw new Error(error?.message ?? "Extraction is no longer active.");
   }
 
-  // Best-effort cleanup of the original (non-PDF) object.
-  if (params.oldObjectPath && params.oldObjectPath !== objectPath) {
-    await supabase.storage
-      .from(env.storageBucket)
-      .remove([params.oldObjectPath]);
-  }
-
   return objectPath;
 }
 
@@ -179,7 +201,7 @@ export async function replaceDocumentWithPdf(params: {
  */
 export async function setIntervieweeRole(
   id: string,
-  intervieweeRole: IntervieweeRole
+  intervieweeRole: IntervieweeRole,
 ): Promise<CaseDocument> {
   const supabase = getSupabaseAdmin();
   const { data, error } = await supabase
@@ -198,14 +220,16 @@ export async function setIntervieweeRole(
     throw new Error("Cannot change the role while extraction is running.");
   }
   if (current.status === "extracted") {
-    throw new Error("Cannot change the role after extraction. Re-upload or re-extract from a corrected pre-extraction state.");
+    throw new Error(
+      "Cannot change the role after extraction. Re-upload or re-extract from a corrected pre-extraction state.",
+    );
   }
   throw new Error("Could not update the interviewee role.");
 }
 
 export async function setDocumentStatus(
   id: string,
-  status: DocumentStatus
+  status: DocumentStatus,
 ): Promise<void> {
   const supabase = getSupabaseAdmin();
   const { error } = await supabase
@@ -226,7 +250,7 @@ export async function setDocumentStatus(
 
 export async function startDocumentExtraction(
   id: string,
-  runId: string
+  runId: string,
 ): Promise<void> {
   const supabase = getSupabaseAdmin();
   const { error } = await supabase
@@ -244,7 +268,7 @@ export async function startDocumentExtraction(
 }
 
 export async function cancelDocumentExtraction(
-  id: string
+  id: string,
 ): Promise<CaseDocument> {
   const supabase = getSupabaseAdmin();
   const { data, error } = await supabase
@@ -267,7 +291,7 @@ export async function cancelDocumentExtraction(
 }
 
 export async function getDocumentExtractionRunState(
-  id: string
+  id: string,
 ): Promise<Pick<CaseDocument, "status"> & { extractionRunId: string | null }> {
   const supabase = getSupabaseAdmin();
   const { data, error } = await supabase
@@ -291,7 +315,7 @@ export async function getDocumentExtractionRunState(
  * Returns an empty array when nothing was saved (a fresh document).
  */
 export async function getDocumentExtractionDrafts(
-  id: string
+  id: string,
 ): Promise<ExtractionDraftGroup[]> {
   const supabase = getSupabaseAdmin();
   const { data, error } = await supabase
@@ -313,7 +337,7 @@ export async function getDocumentExtractionDrafts(
 export async function saveExtractionDrafts(
   id: string,
   runId: string,
-  drafts: ExtractionDraftGroup[]
+  drafts: ExtractionDraftGroup[],
 ): Promise<void> {
   const supabase = getSupabaseAdmin();
   const { error } = await supabase
@@ -360,18 +384,30 @@ export async function saveExtractionResult(
     currentStep: 1,
     totalSteps: 1,
     step: "Verified extraction",
-  }
+  },
 ): Promise<CaseDocument> {
   const supabase = getSupabaseAdmin();
+  const current = await getDocument(id);
+  if (!current) throw new Error("Document not found.");
+  const hasProtectedInvestigatorContent = Boolean(
+    current.investigatorExtractedData || current.approvedExtractedData,
+  );
   const { data, error } = await supabase
     .from("documents")
     .update({
       status: "extracted",
       extracted_data: extractedData,
+      ai_extracted_data: extractedData,
+      ai_file_url: current.fileUrl,
+      ai_raw_text: current.rawText,
+      extraction_review_status: hasProtectedInvestigatorContent
+        ? "needs_review"
+        : "ai_generated",
       extraction_current_step: progress.currentStep,
       extraction_total_steps: progress.totalSteps,
       extraction_step: progress.step,
       extraction_run_id: runId,
+      extraction_revision: current.extractionRevision + 1,
       // Drop the resumable drafts: the document is fully extracted, so a future
       // re-extraction should start fresh rather than reuse stale page drafts.
       extraction_drafts: null,
@@ -388,6 +424,89 @@ export async function saveExtractionResult(
   return mapDocument(data);
 }
 
+export async function saveInvestigatorExtraction(params: {
+  documentId: string;
+  extractedData: ExtractedData;
+  intervieweeRole: IntervieweeRole;
+  sourceVersion: ContentVersion;
+  reason?: string;
+  expectedRevision: number;
+  correctedSource?: {
+    rawText: string;
+    fileUrl?: string;
+    pdfBytes?: Uint8Array;
+  };
+}): Promise<CaseDocument> {
+  const extractedData = extractedDataSchema.parse(params.extractedData);
+  const supabase = getSupabaseAdmin();
+  const uploadedFileUrl = params.correctedSource?.pdfBytes
+    ? `${params.documentId}/${crypto.randomUUID()}.pdf`
+    : null;
+  const correctedFileUrl =
+    uploadedFileUrl ?? params.correctedSource?.fileUrl ?? null;
+  if (uploadedFileUrl && params.correctedSource?.pdfBytes) {
+    const { error } = await supabase.storage
+      .from(env.storageBucket)
+      .upload(uploadedFileUrl, params.correctedSource.pdfBytes, {
+        contentType: CONTENT_TYPE_BY_EXTENSION[".pdf"],
+        upsert: false,
+      });
+    if (error) throw new Error(error.message);
+  }
+  const { data, error } = await supabase.rpc("apply_extraction_review", {
+    p_document_id: params.documentId,
+    p_decision: "edit",
+    p_source_version: params.sourceVersion,
+    p_edited_data: extractedData,
+    p_interviewee_role: params.intervieweeRole,
+    p_reason: params.reason ?? null,
+    p_corrected_file_url: correctedFileUrl,
+    p_corrected_raw_text: params.correctedSource?.rawText ?? null,
+    p_expected_revision: params.expectedRevision,
+  });
+
+  if (error) {
+    if (uploadedFileUrl) {
+      await supabase.storage.from(env.storageBucket).remove([uploadedFileUrl]);
+    }
+    throw new Error(error.message);
+  }
+  const document = data[0];
+  if (!document) {
+    if (uploadedFileUrl) {
+      await supabase.storage.from(env.storageBucket).remove([uploadedFileUrl]);
+    }
+    throw new Error("Document not found.");
+  }
+  return mapDocument(document);
+}
+
+export async function reviewExtraction(params: {
+  documentId: string;
+  decision: "approve" | "exclude";
+  sourceVersion: ContentVersion;
+  reason?: string;
+  expectedRevision: number;
+}): Promise<CaseDocument> {
+  const supabase = getSupabaseAdmin();
+  const { data, error } = await supabase.rpc("apply_extraction_review", {
+    p_document_id: params.documentId,
+    p_decision: params.decision,
+    p_source_version: params.sourceVersion,
+    p_edited_data: null,
+    p_interviewee_role: null,
+    p_reason: params.reason ?? null,
+    p_corrected_file_url: null,
+    p_corrected_raw_text: null,
+    p_expected_revision: params.expectedRevision,
+  });
+
+  if (error) throw new Error(error.message);
+  const document = data[0];
+  if (!document) throw new Error("Document not found.");
+  return mapDocument(document);
+}
+
 /**
  * Permanently delete a document: remove its stored file (best-effort) and its
  * database row. Returns the case id so callers can revalidate the case view.
@@ -397,20 +516,46 @@ export async function deleteDocument(id: string): Promise<{ caseId: string }> {
 
   const { data, error: fetchError } = await supabase
     .from("documents")
-    .select("case_id, file_url")
+    .select(
+      "case_id, file_url, original_file_url, corrected_file_url, ai_file_url, approved_file_url",
+    )
     .eq("id", id)
     .maybeSingle();
 
   if (fetchError) throw new Error(fetchError.message);
   if (!data) throw new Error("Document not found.");
 
-  // Best-effort storage cleanup; a missing object shouldn't block deletion.
-  if (data.file_url) {
-    await supabase.storage.from(env.storageBucket).remove([data.file_url]);
-  }
+  const { data: auditEntries, error: auditError } = await supabase
+    .from("investigator_change_audit")
+    .select(
+      "original_source_file_url, edited_source_file_url, approved_source_file_url",
+    )
+    .eq("document_id", id);
 
+  if (auditError) throw new Error(auditError.message);
+
+  const objectPaths = Array.from(
+    new Set(
+      [
+        data.file_url,
+        data.original_file_url,
+        data.corrected_file_url,
+        data.ai_file_url,
+        data.approved_file_url,
+        ...auditEntries.flatMap((entry) => [
+          entry.original_source_file_url,
+          entry.edited_source_file_url,
+          entry.approved_source_file_url,
+        ]),
+      ].filter((path): path is string => Boolean(path)),
+    ),
+  );
   const { error } = await supabase.from("documents").delete().eq("id", id);
   if (error) throw new Error(error.message);
+
+  if (objectPaths.length > 0) {
+    await supabase.storage.from(env.storageBucket).remove(objectPaths);
+  }
 
   return { caseId: data.case_id };
 }
@@ -418,7 +563,7 @@ export async function deleteDocument(id: string): Promise<{ caseId: string }> {
 /** Create a short-lived signed URL so the original document can be viewed. */
 export async function createSignedUrl(
   objectPath: string,
-  expiresInSeconds = 60 * 10
+  expiresInSeconds = 60 * 10,
 ): Promise<string | null> {
   const supabase = getSupabaseAdmin();
   const { data, error } = await supabase.storage
@@ -427,4 +572,26 @@ export async function createSignedUrl(
 
   if (error) return null;
   return data.signedUrl;
+}
+
+export type DocumentSourceVersion = ContentVersion | "original";
+
+export function getDocumentSourceUrl(
+  document: CaseDocument,
+  version?: DocumentSourceVersion,
+): string {
+  if (version === "original") return document.originalFileUrl;
+  if (version === "ai") return document.aiFileUrl ?? document.correctedFileUrl;
+  if (version === "edited") return document.correctedFileUrl;
+  return document.approvedFileUrl ?? document.correctedFileUrl;
+}
+
+export function getDocumentExtractionVersion(
+  document: CaseDocument,
+  version?: ContentVersion,
+): ExtractedData | null {
+  if (version === "ai") return document.aiExtractedData;
+  if (version === "edited") return document.investigatorExtractedData;
+  if (version === "approved") return document.approvedExtractedData;
+  return document.approvedExtractedData ?? document.extractedData;
 }
